@@ -36,11 +36,15 @@ interface RoomData {
 }
 
 const generateUserId = () => {
-  // This function will run client-side due to useEffect in HomePage
-  let userId = localStorage.getItem('rpsUserId');
-  if (!userId) {
-    userId = Math.random().toString(36).substring(2, 15);
-    localStorage.setItem('rpsUserId', userId);
+  // This function is intended to run client-side.
+  // Its direct call in useState was moved to useEffect.
+  let userId = null;
+  if (typeof window !== 'undefined' && window.localStorage) {
+    userId = localStorage.getItem('rpsUserId');
+    if (!userId) {
+      userId = Math.random().toString(36).substring(2, 15);
+      localStorage.setItem('rpsUserId', userId);
+    }
   }
   return userId;
 };
@@ -60,7 +64,10 @@ export default function HomePage() {
   const { toast } = useToast();
 
   useEffect(() => {
-    setUserId(generateUserId());
+    const id = generateUserId();
+    if (id) {
+      setUserId(id);
+    }
     setInitialLoading(false); 
   }, []);
 
@@ -123,7 +130,12 @@ export default function HomePage() {
           setIsLoading(false);
           if (error || !data) {
             console.error("Error fetching initial room data or room not found:", error);
-            toast({ title: "Room not found", description: "Could not load room details. The room may not exist, RLS policies might be blocking access or Realtime replication is not enabled for 'rooms' table on Supabase.", variant: "destructive", duration: 10000 });
+            toast({ 
+              title: "Room not found or Connection Issue", 
+              description: "Could not load room. Check ID, RLS policies, or if Realtime is enabled for 'rooms' table on Supabase.", 
+              variant: "destructive", 
+              duration: 10000 
+            });
             setCurrentRoomId(null); 
             setGamePhase('lobby');
           } else {
@@ -140,7 +152,7 @@ export default function HomePage() {
           console.error("Supabase channel error: ", status, err);
           toast({ 
             title: "Realtime Connection Error", 
-            description: "Could not connect. Check Supabase dashboard: Realtime enabled for 'rooms' table & RLS policies allow access.", 
+            description: "Could not connect. Ensure Realtime is enabled for 'rooms' table in Supabase DB Replication settings & RLS policies allow access.", 
             variant: "destructive",
             duration: 10000 
           });
@@ -440,8 +452,11 @@ export default function HomePage() {
     if (gamePhase === 'result') {
       displayedOpponentMove = opponentActualMove;
     } else if (gamePhase === 'playing') {
-      // Opponent's move is hidden during 'playing' phase
-      displayedOpponentMove = null; 
+      // Show opponent's move placeholder if they have moved but game isn't 'result' yet
+      // This means opponentActualMove will be non-null if they've moved
+      // but we still pass null to MoveDisplay to hide it.
+      // The isLoading prop on MoveDisplay handles showing a spinner if their move is still pending from DB.
+      displayedOpponentMove = null;
     }
   }
   
@@ -465,6 +480,8 @@ export default function HomePage() {
 
   const selfPlayerName = playerRole === 'player1' ? "Player 1 (You)" : (playerRole === 'player2' ? "Player 2 (You)" : "You");
   const opponentPlayerName = playerRole === 'player1' ? (roomData?.player2_id ? "Player 2" : "Opponent") : "Player 1";
+
+  const isLoadingButtonAction = isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft');
 
 
   if (initialLoading || (isLoading && !currentRoomId && gamePhase === 'lobby')) {
@@ -528,8 +545,8 @@ export default function HomePage() {
               <Loader2 className="w-8 h-8 animate-spin text-primary" />
               <p className="text-xl text-muted-foreground">Waiting for Player 2 to join...</p>
             </div>
-            <Button onClick={handleLeaveRoom} variant="destructive" className="w-full py-3 text-md" disabled={isLoading}>
-              {isLoading && roomData?.status === 'waitingForOpponent' ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2"/>} Close Room
+            <Button onClick={handleLeaveRoom} variant="destructive" className="w-full py-3 text-md" disabled={isLoadingButtonAction}>
+              {isLoadingButtonAction ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2"/>} Close Room
             </Button>
           </CardContent>
         </Card>
@@ -546,8 +563,8 @@ export default function HomePage() {
           </CardHeader>
           <CardContent className="p-0 space-y-6">
             <p className="text-lg text-muted-foreground">Your opponent has disconnected from the room.</p>
-           <Button onClick={handleLeaveRoom} variant="outline" className="w-full py-3 text-md" disabled={isLoading}>
-            {isLoading ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2"/>} Leave Room & Return to Lobby
+           <Button onClick={handleLeaveRoom} variant="outline" className="w-full py-3 text-md" disabled={isLoadingButtonAction}>
+            {isLoadingButtonAction ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2"/>} Leave Room & Return to Lobby
            </Button>
             {playerRole === 'player1' && roomData && ( 
               <Button 
@@ -602,19 +619,31 @@ export default function HomePage() {
 
   return (
     <div className="flex flex-col items-center min-h-screen bg-background text-foreground p-4 md:p-8">
-      <div className="w-full max-w-4xl mx-auto">
-        <header className="flex items-center mb-6 md:mb-10">
-          <div className="flex-1 flex justify-start">
-            <Button onClick={copyRoomId} variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
-                <Copy className="mr-2 h-4 w-4" /> Room: {currentRoomId}
+      <div className="w-full max-w-4xl mx-auto px-4">
+        <header className="relative flex flex-col items-center py-4 mb-6 md:mb-8">
+          <div className="absolute top-4 right-0 sm:right-4">
+            <Button 
+              onClick={handleLeaveRoom} 
+              variant="destructive" 
+              size="sm" 
+              disabled={isLoadingButtonAction}
+            >
+              {isLoadingButtonAction ? 
+                <Loader2 className="h-4 w-4 animate-spin" /> : 
+                <LogOut className="h-4 w-4" />
+              }
+              <span className="hidden sm:inline">Leave</span>
             </Button>
           </div>
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-headline font-bold text-center tracking-tight px-4">
+          
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-headline font-bold text-center tracking-tight w-full px-12 sm:px-16 md:px-20">
             RPS Realtime Duel
           </h1>
-          <div className="flex-1 flex justify-end">
-            <Button onClick={handleLeaveRoom} variant="outline" size="sm" className="text-destructive-foreground bg-destructive hover:bg-destructive/90" disabled={isLoading}>
-              {(isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft')) ? <Loader2 className="animate-spin" /> : <LogOut/>} Leave
+
+          <div className="mt-2 md:mt-3">
+            <Button onClick={copyRoomId} variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+                <Copy className="h-4 w-4" />
+                Room: {currentRoomId}
             </Button>
           </div>
         </header>
