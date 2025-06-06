@@ -55,6 +55,7 @@ interface RoomData {
 }
 
 const generateUserId = () => {
+  // This function will run client-side due to useEffect in HomePage
   let userId = localStorage.getItem('rpsUserId');
   if (!userId) {
     userId = Math.random().toString(36).substring(2, 15);
@@ -71,19 +72,21 @@ export default function HomePage() {
   
   const [roomData, setRoomData] = useState<RoomData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true); // For initial userId generation
   const [gamePhase, setGamePhase] = useState<GamePhase>('lobby');
   const [supabaseChannel, setSupabaseChannel] = useState<RealtimeChannel | null>(null);
 
   const { toast } = useToast();
 
   useEffect(() => {
+    // Generate userId only on the client-side after mount
     setUserId(generateUserId());
-    setInitialLoading(false);
+    setInitialLoading(false); // userId generation is complete
   }, []);
 
   const resetLocalGameStates = useCallback(() => {
     setPlayerRole(null);
+    // No need to reset roomData or currentRoomId here as they are managed by the Supabase subscription
   }, []);
 
   useEffect(() => {
@@ -96,16 +99,13 @@ export default function HomePage() {
       return;
     }
 
-    setIsLoading(true);
+    setIsLoading(true); // Loading while subscribing and fetching initial room data
     const channel = supabase
       .channel(`room-${currentRoomId}`)
       .on<RoomData>(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'rooms', filter: `id=eq.${currentRoomId}` },
         (payload) => {
-          // For realtime updates, we typically don't set isLoading to false here,
-          // as it's for ongoing changes, not an initial load.
-          // setIsLoading(false); 
           if (payload.eventType === 'DELETE') {
             toast({ title: "Room Closed", description: "The room has been closed.", variant: "destructive" });
             setCurrentRoomId(null);
@@ -125,6 +125,7 @@ export default function HomePage() {
               setPlayerRole('player2');
             }
 
+            // Check for opponent left based on online status
             if (newRoomData.status !== 'lobby' && newRoomData.status !== 'waitingForOpponent') {
               const currentRole = newRoomData.player1_id === userId ? 'player1' : (newRoomData.player2_id === userId ? 'player2' : null);
               if (currentRole === 'player1' && newRoomData.player2_id && !newRoomData.player2_online) {
@@ -134,9 +135,6 @@ export default function HomePage() {
               }
             }
           } else if (payload.eventType !== 'DELETE') { 
-            // This condition might need refinement based on actual payloads when RLS restricts data.
-            // For now, let's assume if new is empty and not delete, it's a potential issue.
-            // Fetching the room again might be an option or simply logging.
             console.warn("Received a non-DELETE Realtime event with no new data for room:", currentRoomId, payload);
           }
         }
@@ -144,7 +142,7 @@ export default function HomePage() {
       .subscribe(async (status, err) => {
         if (status === 'SUBSCRIBED') {
           const { data, error } = await supabase.from('rooms').select('*').eq('id', currentRoomId).single();
-          setIsLoading(false);
+          setIsLoading(false); // Done loading initial room data
           if (error || !data) {
             console.error("Error fetching initial room data or room not found:", error);
             toast({ title: "Room not found", description: "Could not load room details. The room may not exist or RLS policies might be blocking access.", variant: "destructive" });
@@ -164,9 +162,9 @@ export default function HomePage() {
           console.error("Supabase channel error: ", status, err);
           toast({ 
             title: "Realtime Connection Error", 
-            description: "Could not connect to real-time service. Please check Supabase dashboard: ensure Realtime is enabled for 'rooms' table and RLS policies allow access.", 
+            description: "Could not connect. Check Supabase dashboard: Realtime enabled for 'rooms' table & RLS policies allow access.", 
             variant: "destructive",
-            duration: 10000 // Longer duration for important messages
+            duration: 10000 
           });
         } else if (status === 'TIMED_OUT') {
           setIsLoading(false);
@@ -183,17 +181,19 @@ export default function HomePage() {
             // console.log('Unsubscribed from room channel:', currentRoomId, status);
         });
       }
+      // Update online status on unmount/leave
       if (currentRoomId && playerRole && userId) {
         const updatePayload: Partial<RoomData> = {};
         if (playerRole === 'player1') updatePayload.player1_online = false;
         if (playerRole === 'player2') updatePayload.player2_online = false;
         
         if (Object.keys(updatePayload).length > 0) {
+            // Using 'beacon' might be more reliable for onbeforeunload, but this is a simple cleanup
             supabase.from('rooms').update(updatePayload).eq('id', currentRoomId).then();
         }
       }
     };
-  }, [currentRoomId, userId, toast]); // playerRole removed from deps to avoid re-subscribing when role changes due to data
+  }, [currentRoomId, userId, toast]); 
 
 
   useEffect(() => {
@@ -208,7 +208,7 @@ export default function HomePage() {
         if(error) console.error("Error updating online status:", error);
       });
     }
-  }, [currentRoomId, playerRole, roomData?.status, roomData?.player1_online, roomData?.player2_online, userId]); // Added roomData online states to dependencies
+  }, [currentRoomId, playerRole, roomData?.status, roomData?.player1_online, roomData?.player2_online, userId]);
 
 
   const handleCreateRoom = async () => {
@@ -218,7 +218,7 @@ export default function HomePage() {
     }
     setIsLoading(true);
     const newRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const initialRoomData: Omit<RoomData, 'created_at' | 'last_activity'> = {
+    const initialRoomData: Omit<RoomData, 'id' | 'created_at' | 'last_activity'> & { id: string } = {
       id: newRoomId,
       player1_id: userId,
       player2_id: null,
@@ -235,13 +235,11 @@ export default function HomePage() {
       const { error } = await supabase.from('rooms').insert(initialRoomData);
       if (error) throw error;
       setCurrentRoomId(newRoomId);
-      // setPlayerRole('player1'); // Role will be set by the realtime listener/initial fetch
-      // setGamePhase('waitingForOpponent'); // Phase will be set by realtime listener/initial fetch
     } catch (error: any) {
       toast({ title: "Failed to create room", description: error.message, variant: "destructive" });
       console.error("Create room error:", error);
     } finally {
-      setIsLoading(false); // Set to false here, subscription will handle the rest
+      setIsLoading(false); 
     }
   };
 
@@ -266,20 +264,16 @@ export default function HomePage() {
 
       if (fetchError || !roomToJoin) {
         toast({ title: "Room not found", description: `Room ${prospectiveRoomId} does not exist. Check ID or RLS policies.`, variant: "destructive" });
-        setIsLoading(false);
         return;
       }
 
       if (roomToJoin.player1_id === userId) { 
         setCurrentRoomId(prospectiveRoomId); 
-        // setPlayerRole('player1'); // Role set by listener
-        setIsLoading(false);
         return;
       }
 
       if (roomToJoin.player2_id && roomToJoin.player2_id !== userId) {
         toast({ title: "Room is full", description: `Room ${prospectiveRoomId} is already full.`, variant: "destructive" });
-        setIsLoading(false);
         return;
       }
       
@@ -295,24 +289,20 @@ export default function HomePage() {
         .is('player2_id', null); 
 
       if (updateError) {
-        // Check if room became full just before this user tried to join
         const { data: refetchedRoom } = await supabase.from('rooms').select('player2_id').eq('id', prospectiveRoomId).single();
         if (refetchedRoom && refetchedRoom.player2_id !== null && refetchedRoom.player2_id !== userId) {
              toast({ title: "Room is full", description: "Another player joined just before you.", variant: "destructive" });
         } else {
-            throw updateError; // Otherwise, it's a different error
+            throw updateError;
         }
-        setIsLoading(false);
         return;
       }
-      
       setCurrentRoomId(prospectiveRoomId);
-      // setPlayerRole('player2'); // Role set by listener
     } catch (error: any) {
       console.error("Join room failed:", error);
       toast({ title: "Failed to join room", description: error.message, variant: "destructive" });
     } finally {
-        // setIsLoading(false); // isLoading should be managed by the subscription effect primarily
+        setIsLoading(false); 
     }
   };
 
@@ -323,7 +313,6 @@ export default function HomePage() {
     const previousRoomId = currentRoomId; 
     const previousPlayerRole = playerRole;
     
-    // Unsubscribe first
     if (supabaseChannel) {
       await supabase.removeChannel(supabaseChannel);
       setSupabaseChannel(null);
@@ -338,12 +327,10 @@ export default function HomePage() {
 
     try {
       if (previousPlayerRole === 'player1') {
-        // Player 1 deletes the room
         const { error } = await supabase.from('rooms').delete().eq('id', previousRoomId);
         if (error) throw error;
         toast({ title: "Room Closed", description: "You have left and closed the room."});
       } else { 
-        // Player 2 leaves, room becomes waiting for opponent
         const { error } = await supabase
           .from('rooms')
           .update({
@@ -374,7 +361,7 @@ export default function HomePage() {
       return;
     }
 
-    setIsLoading(true); // Indicate loading while submitting move
+    setIsLoading(true); 
     try {
       const updatePayload: Partial<RoomData> = { last_activity: new Date().toISOString() };
       updatePayload[playerMoveField] = move;
@@ -383,25 +370,24 @@ export default function HomePage() {
         .from('rooms')
         .update(updatePayload)
         .eq('id', currentRoomId);
-      if (error) throw error;
-      // Realtime update will handle new roomData, no need to setIsLoading(false) here typically
-    } catch (error: any) {
-      toast({ title: "Failed to make move", description: error.message, variant: "destructive" });
-      console.error("Select move error:", error);
-      setIsLoading(false); // Set false on error
-    } 
-    // setIsLoading(false) can be handled by the realtime update or if an error occurs
+      if (error) {
+        toast({ title: "Failed to make move", description: error.message, variant: "destructive" });
+        console.error("Select move error:", error);
+      }
+    } catch (error: any) { 
+      toast({ title: "Error during move submission", description: error.message, variant: "destructive" });
+      console.error("Select move submission error:", error);
+    } finally {
+      setIsLoading(false); 
+    }
   };
 
   useEffect(() => {
-    // This effect should only be run by player1 to avoid race conditions / double updates
     if (!roomData || !currentRoomId || playerRole !== 'player1' || roomData.status !== 'playing' || !userId) return;
 
     const { player1_move, player2_move, round } = roomData;
 
     if (player1_move && player2_move) {
-      // setIsLoading(true); // Player 1 is processing the result
-      
       const resultP1 = determineWinner(player1_move, player2_move);
       let newP1Score = roomData.player1_score;
       let newP2Score = roomData.player2_score;
@@ -412,7 +398,7 @@ export default function HomePage() {
       const updatePayload: Partial<RoomData> = {
         player1_score: newP1Score,
         player2_score: newP2Score,
-        status: 'result', // Change status to result
+        status: 'result', 
         last_activity: new Date().toISOString()
       };
 
@@ -420,13 +406,12 @@ export default function HomePage() {
         .from('rooms')
         .update(updatePayload)
         .eq('id', currentRoomId)
-        .eq('round', round) // Ensure we're updating the correct round to prevent race conditions
+        .eq('round', round) 
         .then(({ error }) => {
           if (error) {
             toast({ title: "Error processing round", description: error.message, variant: "destructive" });
             console.error("Failed to update result:", error);
           }
-          // setIsLoading(false); // Result processing complete
         });
     }
   }, [roomData, currentRoomId, playerRole, toast, userId]);
@@ -439,24 +424,27 @@ export default function HomePage() {
         }
         return;
     }
-    // setIsLoading(true);
+    setIsLoading(true);
     try {
       const { error } = await supabase
         .from('rooms')
         .update({
           player1_move: null,
           player2_move: null,
-          status: 'playing', // Reset status to playing
+          status: 'playing', 
           round: roomData.round + 1,
           last_activity: new Date().toISOString()
         })
         .eq('id', currentRoomId);
-      if (error) throw error;
-      // Realtime update will handle new phase, setIsLoading(false) might not be needed here
+      if (error) {
+        toast({ title: "Failed to start new round", description: error.message, variant: "destructive" });
+        console.error("Play again error:", error);
+      }
     } catch (error: any) {
-      toast({ title: "Failed to start new round", description: error.message, variant: "destructive" });
+      toast({ title: "Error during play again", description: error.message, variant: "destructive" });
       console.error("Play again error:", error);
-      // setIsLoading(false);
+    } finally {
+      setIsLoading(false);
     }
   };
   
@@ -493,7 +481,6 @@ export default function HomePage() {
   const opponentPlayerName = playerRole === 'player1' ? (roomData?.player2_id ? "Player 2" : "Opponent") : "Player 1";
 
 
-  // Adjusted loading state logic
   if (initialLoading || (isLoading && !currentRoomId && gamePhase === 'lobby')) {
      return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
@@ -564,31 +551,31 @@ export default function HomePage() {
          <Button onClick={handleLeaveRoom} variant="default" className="rounded-lg shadow-md mb-4">
           Leave Room & Return to Lobby
         </Button>
-        {playerRole === 'player1' && roomData && ( // Ensure roomData exists for player1_online check
+        {playerRole === 'player1' && roomData && ( 
             <Button 
                 onClick={async () => {
                     if(currentRoomId) {
+                        setIsLoading(true);
                         const {error} = await supabase.from('rooms').update({ 
                             player2_id: null, 
                             player2_move: null, 
                             status: 'waitingForOpponent', 
                             player2_online: false,
-                            player2_score: 0, // Optionally reset P2 score
-                            round: 1, // Optionally reset round
+                            player2_score: 0, 
+                            round: 1, 
                             last_activity: new Date().toISOString()
                         }).eq('id', currentRoomId);
-
+                        setIsLoading(false);
                         if (error) {
                             toast({title: "Error", description: "Could not reset room to wait for new opponent.", variant: "destructive"});
-                        } else {
-                           // Game phase will be updated by realtime subscription
                         }
                     }
                 }} 
                 variant="outline" 
                 className="rounded-lg shadow-md"
+                disabled={isLoading}
             >
-                Wait for New Opponent
+                {isLoading ? <Loader2 className="mr-2 animate-spin" /> : "Wait for New Opponent"}
             </Button>
         )}
       </div>
@@ -605,8 +592,6 @@ export default function HomePage() {
   }
 
   if (!roomData && !currentRoomId && gamePhase !== 'lobby') { 
-    // This case indicates a state inconsistency, try to reset to lobby.
-    // A useEffect could also handle this by setting gamePhase to 'lobby' if currentRoomId becomes null.
     console.warn("State inconsistency: No roomData or currentRoomId, but not in lobby. Resetting to lobby.");
     setGamePhase('lobby'); 
     return (
@@ -616,7 +601,7 @@ export default function HomePage() {
       </div>
     );
   }
-  if (!roomData || !userId) { // If still no roomData or userId (should be rare after loading states), render nothing or a fallback.
+  if (!roomData || !userId) { 
     return null; 
   }
   
@@ -728,3 +713,4 @@ export default function HomePage() {
     </div>
   );
 }
+
