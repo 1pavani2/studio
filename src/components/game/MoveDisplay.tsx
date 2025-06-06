@@ -1,3 +1,4 @@
+
 "use client";
 
 import type { Move } from '@/lib/gameLogic';
@@ -7,11 +8,12 @@ import { cn } from '@/lib/utils';
 
 interface MoveDisplayProps {
   move: Move | null;
-  placeholderType?: 'user' | 'ai' | 'generic';
+  placeholderType?: 'user' | 'ai' | 'generic'; // 'user' for self, 'ai' for opponent (visual cue)
   isLoading?: boolean;
-  isShaking?: boolean;
-  highlightColor?: string; // e.g., 'hsl(var(--accent))' for win
+  isShaking?: boolean; // Generally not used for PvP to avoid distraction
+  highlightColor?: string; 
   className?: string;
+  isPlayerSide?: boolean; // To distinguish if this display is for the active player or opponent
 }
 
 const moveIcons: Record<Move, React.FC<LucideProps>> = {
@@ -27,15 +29,16 @@ export function MoveDisplay({
   isShaking = false,
   highlightColor,
   className,
+  isPlayerSide = false,
 }: MoveDisplayProps) {
   const Icon = move ? moveIcons[move] : null;
   
   const PlaceholderIcon = () => {
-    switch (placeholderType) {
-      case 'user': return <User className="w-20 h-20 text-muted-foreground" />;
-      case 'ai': return <Cpu className="w-20 h-20 text-muted-foreground" />;
-      default: return <HelpCircle className="w-20 h-20 text-muted-foreground" />;
+    // For PvP, 'user' icon for current player's empty slot, 'cpu' (or other) for opponent's empty slot
+    if (isPlayerSide) {
+      return <User className="w-20 h-20 text-muted-foreground" />;
     }
+    return <Cpu className="w-20 h-20 text-muted-foreground" />; // Visually like an "opponent"
   };
 
   return (
@@ -49,7 +52,7 @@ export function MoveDisplay({
       style={highlightColor ? { '--tw-shadow-color': highlightColor } as React.CSSProperties : {}}
       aria-live="polite"
     >
-      {isLoading ? (
+      {isLoading && !Icon ? ( // Show loader only if there's no move to display yet but loading is true
         <Loader2 className="w-20 h-20 animate-spin text-primary" />
       ) : Icon ? (
         <Icon className="w-24 h-24 text-foreground" />

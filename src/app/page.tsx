@@ -1,185 +1,290 @@
+
 "use client";
 
 import { useState, useEffect } from 'react';
 import type { Move, Result } from '@/lib/gameLogic';
 import { determineWinner } from '@/lib/gameLogic';
-import { aiOpponentStrategy, type AiOpponentStrategyOutput } from '@/ai/flows/ai-opponent-strategy';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { MoveButton } from '@/components/game/MoveButton';
 import { MoveDisplay } from '@/components/game/MoveDisplay';
 import { ScoreBoard } from '@/components/game/ScoreBoard';
 import { ResultDisplay } from '@/components/game/ResultDisplay';
-import { Loader2, User, Cpu } from 'lucide-react';
+import { Loader2, Users, LogOut } from 'lucide-react';
 
-type GamePhase = 'select' | 'reveal' | 'result';
+type GamePhase = 'lobby' | 'waitingForOpponent' | 'playing' | 'reveal' | 'result';
+type PlayerRole = 'player1' | 'player2' | null;
 
 export default function HomePage() {
-  const [userMove, setUserMove] = useState<Move | null>(null);
-  const [aiMove, setAiMove] = useState<Move | null>(null);
-  const [aiReasoning, setAiReasoning] = useState<string | null>(null);
-  const [roundResult, setRoundResult] = useState<Result>(null);
-  const [userScore, setUserScore] = useState(0);
-  const [aiScore, setAiScore] = useState(0);
-  const [isLoadingAI, setIsLoadingAI] = useState(false);
-  const [userMovesHistory, setUserMovesHistory] = useState<Move[]>([]);
-  const [gamePhase, setGamePhase] = useState<GamePhase>('select');
-  const [showConfetti, setShowConfetti] = useState(false);
+  const [roomIdInput, setRoomIdInput] = useState<string>('');
+  const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
+  const [playerRole, setPlayerRole] = useState<PlayerRole>(null);
 
-  const handleUserSelectMove = async (move: Move) => {
-    setUserMove(move);
-    setGamePhase('reveal');
-    setIsLoadingAI(true);
-    setAiMove(null); // Clear previous AI move
-    setRoundResult(null); // Clear previous result
-    setAiReasoning(null);
+  const [player1Move, setPlayer1Move] = useState<Move | null>(null);
+  const [player2Move, setPlayer2Move] = useState<Move | null>(null);
 
-    try {
-      const aiResponse: AiOpponentStrategyOutput = await aiOpponentStrategy({ userMoves: userMovesHistory });
-      setAiMove(aiResponse.aiMove);
-      setAiReasoning(aiResponse.reasoning);
+  const [roundResult, setRoundResult] = useState<Result>(null); // Result from P1's perspective
+  const [player1Score, setPlayer1Score] = useState(0);
+  const [player2Score, setPlayer2Score] = useState(0);
 
-      const result = determineWinner(move, aiResponse.aiMove);
-      setRoundResult(result);
+  const [isLoading, setIsLoading] = useState(false);
+  const [gamePhase, setGamePhase] = useState<GamePhase>('lobby');
 
-      if (result === 'Win') {
-        setUserScore((prev) => prev + 1);
-        setShowConfetti(true);
-        setTimeout(() => setShowConfetti(false), 3000); // Confetti for 3 seconds
-      } else if (result === 'Lose') {
-        setAiScore((prev) => prev + 1);
-      }
-
-      setUserMovesHistory((prev) => [...prev, move]);
-      setGamePhase('result');
-    } catch (error) {
-      console.error("Error getting AI move:", error);
-      // Handle error, maybe set a default AI move or show an error message
-      // For now, let's make AI pick randomly on error to keep game playable
-      const moves: Move[] = ['Rock', 'Paper', 'Scissors'];
-      const randomAiMove = moves[Math.floor(Math.random() * moves.length)];
-      setAiMove(randomAiMove);
-      setAiReasoning("AI strategy unavailable, made a random move.");
-      const result = determineWinner(move, randomAiMove);
-      setRoundResult(result);
-      if (result === 'Win') setUserScore((prev) => prev + 1);
-      else if (result === 'Lose') setAiScore((prev) => prev + 1);
-      setUserMovesHistory((prev) => [...prev, move]);
-      setGamePhase('result');
-    } finally {
-      setIsLoadingAI(false);
-    }
+  const resetGameStates = () => {
+    setPlayer1Move(null);
+    setPlayer2Move(null);
+    setRoundResult(null);
+    setPlayer1Score(0);
+    setPlayer2Score(0);
   };
+
+  const handleCreateRoom = () => {
+    const newRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    setCurrentRoomId(newRoomId);
+    setPlayerRole('player1');
+    resetGameStates();
+    setGamePhase('waitingForOpponent');
+  };
+
+  const handleJoinRoom = () => {
+    if (!roomIdInput.trim()) {
+      alert("Please enter a Room ID.");
+      return;
+    }
+    setCurrentRoomId(roomIdInput.trim().toUpperCase());
+    setPlayerRole('player2');
+    resetGameStates();
+    // In a real app, you'd verify the room and if P1 is present.
+    // For simulation, we assume P1 is waiting.
+    setGamePhase('playing');
+  };
+
+  const handleLeaveRoom = () => {
+    setCurrentRoomId(null);
+    setPlayerRole(null);
+    resetGameStates();
+    setGamePhase('lobby');
+    setRoomIdInput('');
+  };
+
+  const handlePlayerSelectMove = (move: Move) => {
+    if (!playerRole) return;
+
+    if (playerRole === 'player1' && !player1Move) {
+      setPlayer1Move(move);
+    } else if (playerRole === 'player2' && !player2Move) {
+      setPlayer2Move(move);
+    }
+    // In a real app, this move would be sent to a server.
+    // The useEffect below simulates the game progression.
+  };
+
+  useEffect(() => {
+    // This effect simulates game progression once both players have moved.
+    if (player1Move && player2Move && gamePhase === 'playing') {
+      setGamePhase('reveal');
+      setIsLoading(true); // Simulate "revealing"
+
+      const revealTimeout = setTimeout(() => {
+        const resultP1 = determineWinner(player1Move, player2Move);
+        setRoundResult(resultP1);
+
+        if (resultP1 === 'Win') {
+          setPlayer1Score((prev) => prev + 1);
+        } else if (resultP1 === 'Lose') {
+          setPlayer2Score((prev) => prev + 1);
+        }
+        setIsLoading(false);
+        setGamePhase('result');
+      }, 1500); // Simulate delay for suspense
+
+      return () => clearTimeout(revealTimeout);
+    }
+  }, [player1Move, player2Move, gamePhase]);
 
   const handlePlayAgain = () => {
-    setUserMove(null);
-    setAiMove(null);
+    setPlayer1Move(null);
+    setPlayer2Move(null);
     setRoundResult(null);
-    setGamePhase('select');
-    setAiReasoning(null);
-    setShowConfetti(false);
+    setGamePhase('playing');
+    // Scores are preserved for the room session
   };
 
+  const yourMove = playerRole === 'player1' ? player1Move : player2Move;
+  const opponentMove = playerRole === 'player1' ? player2Move : player1Move;
+  const yourScore = playerRole === 'player1' ? player1Score : player2Score;
+  const opponentScore = playerRole === 'player1' ? player2Score : player1Score;
+  const canMakeMove = 
+    (playerRole === 'player1' && !player1Move) ||
+    (playerRole === 'player2' && !player2Move);
+
+  let displayResult: Result = null;
+  if (roundResult) {
+    if (playerRole === 'player1') {
+      displayResult = roundResult;
+    } else { // Player 2's perspective
+      if (roundResult === 'Win') displayResult = 'Lose';
+      else if (roundResult === 'Lose') displayResult = 'Win';
+      else displayResult = 'Draw';
+    }
+  }
+
+  const showMoveButtons = gamePhase === 'playing' && playerRole && canMakeMove;
+  const showWaitingForYourMove = gamePhase === 'playing' && playerRole && canMakeMove;
+  const showWaitingForOpponent = gamePhase === 'playing' && playerRole && !canMakeMove && !(player1Move && player2Move);
+  
+  const selfPlayerName = playerRole === 'player1' ? "Player 1 (You)" : "Player 2 (You)";
+  const opponentPlayerName = playerRole === 'player1' ? "Player 2" : "Player 1";
+
+
+  if (gamePhase === 'lobby') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
+        <h1 className="text-4xl sm:text-5xl md:text-6xl font-headline font-extrabold mb-10 text-center tracking-tight">RPS Dueler</h1>
+        <Card className="w-full max-w-md p-6 md:p-8 shadow-xl rounded-xl">
+          <CardHeader className="p-0 mb-6 text-center">
+            <CardTitle className="text-2xl md:text-3xl font-semibold">Join or Create a Room</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0 space-y-6">
+            <Button onClick={handleCreateRoom} className="w-full py-6 text-lg rounded-lg shadow-md hover:shadow-lg" variant="default">
+              <Users className="mr-2" /> Create New Room
+            </Button>
+            <div className="flex items-center space-x-2">
+              <hr className="flex-grow border-border" />
+              <span className="text-muted-foreground">OR</span>
+              <hr className="flex-grow border-border" />
+            </div>
+            <div className="space-y-2">
+              <Input 
+                type="text" 
+                placeholder="Enter Room ID" 
+                value={roomIdInput}
+                onChange={(e) => setRoomIdInput(e.target.value)}
+                className="h-12 text-center text-lg"
+              />
+              <Button onClick={handleJoinRoom} className="w-full py-6 text-lg rounded-lg shadow-md hover:shadow-lg" variant="outline">
+                Join Room
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+        <p className="mt-8 text-sm text-muted-foreground text-center max-w-md">
+          Note: Multiplayer is simulated locally in this browser session. For true online play, a backend server would be needed.
+        </p>
+      </div>
+    );
+  }
+
+  if (gamePhase === 'waitingForOpponent' && currentRoomId) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
+        <h1 className="text-3xl sm:text-4xl font-headline font-bold mb-6 text-center">Room: {currentRoomId}</h1>
+        <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
+        <p className="text-xl text-muted-foreground mb-8">Waiting for Player 2 to join...</p>
+        <p className="text-sm text-muted-foreground mb-6">Share this Room ID with your opponent: <strong className="text-foreground">{currentRoomId}</strong></p>
+        <Button onClick={handleLeaveRoom} variant="outline" className="rounded-lg shadow-md">
+          <LogOut className="mr-2" /> Leave Room
+        </Button>
+      </div>
+    );
+  }
+  
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4 relative overflow-hidden">
-      {showConfetti && (
-        <div className="absolute inset-0 pointer-events-none z-50">
-          {[...Array(100)].map((_, i) => (
-            <div
-              key={i}
-              className="absolute rounded-full bg-accent animate-fall"
-              style={{
-                left: `${Math.random() * 100}%`,
-                width: `${Math.random() * 8 + 4}px`,
-                height: `${Math.random() * 8 + 4}px`,
-                animationDelay: `${Math.random() * 2}s`,
-                animationDuration: `${Math.random() * 3 + 2}s`,
-                opacity: Math.random() * 0.5 + 0.5,
-              }}
-            />
-          ))}
-        </div>
-      )}
-      <style jsx global>{`
-        @keyframes fall {
-          0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; }
-          100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
-        }
-        .animate-fall {
-          animation-name: fall;
-          animation-timing-function: linear;
-        }
-      `}</style>
-
-
+      <div className="absolute top-4 right-4 flex items-center space-x-4">
+        <span className="text-sm font-medium text-muted-foreground">Room ID: <strong className="text-foreground">{currentRoomId}</strong></span>
+        <Button onClick={handleLeaveRoom} variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive">
+          <LogOut className="mr-1 h-4 w-4" /> Leave
+        </Button>
+      </div>
       <h1 className="text-4xl sm:text-5xl md:text-6xl font-headline font-extrabold mb-6 md:mb-10 text-center tracking-tight"
           style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.1)' }}>
         RPS Dueler
       </h1>
       
-      <ScoreBoard userScore={userScore} aiScore={aiScore} />
+      <ScoreBoard 
+        player1Score={player1Score} 
+        player2Score={player2Score}
+        player1Name={playerRole === 'player1' ? "You (P1)" : "Player 1"}
+        player2Name={playerRole === 'player2' ? "You (P2)" : "Player 2"}
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-10 my-6 md:my-8 w-full max-w-5xl items-start">
+        {/* Current Player's Display */}
         <Card className="flex flex-col items-center p-4 md:p-6 shadow-xl rounded-xl">
-          <h2 className="text-2xl md:text-3xl font-headline font-semibold mb-4">You</h2>
+          <h2 className="text-2xl md:text-3xl font-headline font-semibold mb-4">{selfPlayerName}</h2>
           <MoveDisplay 
-            move={userMove} 
-            placeholderType="user"
-            highlightColor={roundResult === 'Win' ? 'hsl(var(--accent))' : undefined}
+            move={yourMove} 
+            placeholderType={playerRole === 'player1' ? 'user' : 'user'} // 'user' for self
+            highlightColor={displayResult === 'Win' ? 'hsl(var(--accent))' : undefined}
+            isPlayerSide={true}
           />
         </Card>
 
+        {/* Game Controls / Result Display */}
         <div className="flex flex-col items-center justify-start md:justify-center md:order-none order-last md:min-h-[300px] pt-4 md:pt-0">
-          {gamePhase === 'select' && (
+          {showMoveButtons && (
             <div className="flex flex-col items-center space-y-3 w-full">
               <p className="text-lg md:text-xl mb-2 text-center">Choose your move:</p>
-              <MoveButton move="Rock" onClick={() => handleUserSelectMove('Rock')} disabled={isLoadingAI} />
-              <MoveButton move="Paper" onClick={() => handleUserSelectMove('Paper')} disabled={isLoadingAI} />
-              <MoveButton move="Scissors" onClick={() => handleUserSelectMove('Scissors')} disabled={isLoadingAI} />
+              <MoveButton move="Rock" onClick={() => handlePlayerSelectMove('Rock')} />
+              <MoveButton move="Paper" onClick={() => handlePlayerSelectMove('Paper')} />
+              <MoveButton move="Scissors" onClick={() => handlePlayerSelectMove('Scissors')} />
             </div>
           )}
           
-          {(gamePhase === 'reveal' || gamePhase === 'result') && !isLoadingAI && roundResult && (
-             <ResultDisplay result={roundResult} />
+          {showWaitingForYourMove && !isLoading && gamePhase === 'playing' && (
+             <p className="text-muted-foreground text-lg text-center py-10">Your turn to move...</p>
           )}
 
-           {isLoadingAI && gamePhase === 'reveal' && (
+          {showWaitingForOpponent && !isLoading && gamePhase === 'playing' && (
+            <div className="flex flex-col items-center text-center py-10">
+              <Loader2 className="w-12 h-12 animate-spin text-primary mb-3" />
+              <p className="text-muted-foreground text-lg">Waiting for opponent's move...</p>
+            </div>
+          )}
+          
+          {isLoading && (gamePhase === 'reveal' || (gamePhase === 'playing' && (player1Move || player2Move) && !(player1Move && player2Move) ) ) && (
               <div className="flex flex-col items-center text-center py-10">
                 <Loader2 className="w-16 h-16 animate-spin text-primary mb-3" />
-                <p className="text-muted-foreground text-lg">AI is strategizing...</p>
+                <p className="text-muted-foreground text-lg">
+                  {gamePhase === 'reveal' ? "Revealing moves..." : "Processing..."}
+                </p>
               </div>
           )}
+          
+          {gamePhase === 'reveal' && !isLoading && player1Move && player2Move && (
+            <p className="text-muted-foreground text-lg text-center py-10">Both players have moved. Revealing...</p>
+          )}
 
-          {gamePhase === 'result' && !isLoadingAI && (
+          {gamePhase === 'result' && !isLoading && displayResult && (
+             <ResultDisplay result={displayResult} playerRole={playerRole} />
+          )}
+
+          {gamePhase === 'result' && !isLoading && (
             <Button onClick={handlePlayAgain} className="mt-6 md:mt-8 w-full md:w-auto px-8 py-6 text-lg rounded-lg shadow-md hover:shadow-lg transition-shadow" variant="default">
               Play Again
             </Button>
           )}
         </div>
 
+        {/* Opponent's Display */}
         <Card className="flex flex-col items-center p-4 md:p-6 shadow-xl rounded-xl">
-          <h2 className="text-2xl md:text-3xl font-headline font-semibold mb-4">AI</h2>
+          <h2 className="text-2xl md:text-3xl font-headline font-semibold mb-4">{opponentPlayerName}</h2>
           <MoveDisplay 
-            move={aiMove} 
-            placeholderType="ai" 
-            isLoading={isLoadingAI && gamePhase === 'reveal'}
-            isShaking={isLoadingAI && gamePhase === 'reveal'}
-            highlightColor={roundResult === 'Lose' ? 'hsl(var(--accent))' : undefined}
+            move={opponentMove} 
+            placeholderType={playerRole === 'player1' ? 'ai' : 'ai'} // 'ai' icon for opponent visually
+            isLoading={isLoading && gamePhase === 'reveal'} // Only show general loading during reveal
+            isShaking={false} // Shaking might be confusing for PvP
+            highlightColor={displayResult === 'Lose' ? 'hsl(var(--accent))' : undefined}
+            isPlayerSide={false}
           />
         </Card>
       </div>
-
-      {aiReasoning && gamePhase === 'result' && !isLoadingAI && (
-        <Card className="mt-6 md:mt-8 p-4 md:p-6 w-full max-w-md shadow-lg rounded-xl">
-          <CardHeader className="p-2 md:p-4 text-center">
-            <CardTitle className="text-lg md:text-xl font-headline">AI's Tactical Insight</CardTitle>
-          </CardHeader>
-          <CardContent className="p-2 md:p-4 text-center">
-            <p className="text-sm md:text-base text-muted-foreground italic">"{aiReasoning}"</p>
-          </CardContent>
-        </Card>
-      )}
+       <p className="mt-8 text-sm text-muted-foreground text-center max-w-md">
+          Note: Multiplayer is simulated locally in this browser session.
+        </p>
     </div>
   );
 }

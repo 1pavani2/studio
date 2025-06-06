@@ -1,14 +1,16 @@
+
 "use client";
 
 import type { Result } from '@/lib/gameLogic';
 import { cn } from '@/lib/utils';
 
 interface ResultDisplayProps {
-  result: Result;
+  result: Result; // This should be the result from THE CURRENT PLAYER'S perspective
+  playerRole: 'player1' | 'player2' | null; // To contextualize if needed, though result prop should be pre-adjusted
 }
 
-export function ResultDisplay({ result }: ResultDisplayProps) {
-  if (!result) return null;
+export function ResultDisplay({ result, playerRole }: ResultDisplayProps) {
+  if (!result || !playerRole) return null;
 
   let message = '';
   let textColor = '';
@@ -16,15 +18,15 @@ export function ResultDisplay({ result }: ResultDisplayProps) {
   switch (result) {
     case 'Win':
       message = 'You Win!';
-      textColor = 'text-accent'; // Lime Green
+      textColor = 'text-accent'; 
       break;
     case 'Lose':
       message = 'You Lose!';
-      textColor = 'text-destructive'; // Red
+      textColor = 'text-destructive';
       break;
     case 'Draw':
       message = "It's a Draw!";
-      textColor = 'text-foreground'; // Neutral
+      textColor = 'text-foreground'; 
       break;
   }
 
