@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect, useCallback } from 'react';
@@ -16,25 +15,6 @@ import { ScoreBoard } from '@/components/game/ScoreBoard';
 import { ResultDisplay } from '@/components/game/ResultDisplay';
 import { Loader2, Users, LogOut, Copy } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
-
-// IMPORTANT: You need to create a 'rooms' table in your Supabase project
-// with the following columns (or similar structure):
-// - id: TEXT (Primary Key, Room ID)
-// - created_at: TIMESTAMPTZ (default now())
-// - player1_id: TEXT
-// - player2_id: TEXT (nullable)
-// - player1_move: TEXT (nullable, 'Rock', 'Paper', 'Scissors')
-// - player2_move: TEXT (nullable, 'Rock', 'Paper', 'Scissors')
-// - player1_score: INTEGER (default 0)
-// - player2_score: INTEGER (default 0)
-// - status: TEXT ('waitingForOpponent', 'playing', 'result')
-// - round: INTEGER (default 1)
-// - last_activity: TIMESTAMPTZ (default now())
-// - player1_online: BOOLEAN (default false)
-// - player2_online: BOOLEAN (default false)
-//
-// Also, ensure you have appropriate Row Level Security (RLS) policies enabled
-// for the 'rooms' table and that REALTIME is enabled for the table in Supabase Dashboard (Database > Replication).
 
 type GamePhase = 'lobby' | 'waitingForOpponent' | 'playing' | 'reveal' | 'result' | 'opponentLeft';
 type PlayerRole = 'player1' | 'player2' | null;
@@ -72,21 +52,19 @@ export default function HomePage() {
   
   const [roomData, setRoomData] = useState<RoomData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true); // For initial userId generation
+  const [initialLoading, setInitialLoading] = useState(true);
   const [gamePhase, setGamePhase] = useState<GamePhase>('lobby');
   const [supabaseChannel, setSupabaseChannel] = useState<RealtimeChannel | null>(null);
 
   const { toast } = useToast();
 
   useEffect(() => {
-    // Generate userId only on the client-side after mount
     setUserId(generateUserId());
-    setInitialLoading(false); // userId generation is complete
+    setInitialLoading(false); 
   }, []);
 
   const resetLocalGameStates = useCallback(() => {
     setPlayerRole(null);
-    // No need to reset roomData or currentRoomId here as they are managed by the Supabase subscription
   }, []);
 
   useEffect(() => {
@@ -99,7 +77,7 @@ export default function HomePage() {
       return;
     }
 
-    setIsLoading(true); // Loading while subscribing and fetching initial room data
+    setIsLoading(true);
     const channel = supabase
       .channel(`room-${currentRoomId}`)
       .on<RoomData>(
@@ -125,7 +103,6 @@ export default function HomePage() {
               setPlayerRole('player2');
             }
 
-            // Check for opponent left based on online status
             if (newRoomData.status !== 'lobby' && newRoomData.status !== 'waitingForOpponent') {
               const currentRole = newRoomData.player1_id === userId ? 'player1' : (newRoomData.player2_id === userId ? 'player2' : null);
               if (currentRole === 'player1' && newRoomData.player2_id && !newRoomData.player2_online) {
@@ -142,7 +119,7 @@ export default function HomePage() {
       .subscribe(async (status, err) => {
         if (status === 'SUBSCRIBED') {
           const { data, error } = await supabase.from('rooms').select('*').eq('id', currentRoomId).single();
-          setIsLoading(false); // Done loading initial room data
+          setIsLoading(false);
           if (error || !data) {
             console.error("Error fetching initial room data or room not found:", error);
             toast({ title: "Room not found", description: "Could not load room details. The room may not exist or RLS policies might be blocking access.", variant: "destructive" });
@@ -181,14 +158,12 @@ export default function HomePage() {
             // console.log('Unsubscribed from room channel:', currentRoomId, status);
         });
       }
-      // Update online status on unmount/leave
       if (currentRoomId && playerRole && userId) {
         const updatePayload: Partial<RoomData> = {};
         if (playerRole === 'player1') updatePayload.player1_online = false;
         if (playerRole === 'player2') updatePayload.player2_online = false;
         
         if (Object.keys(updatePayload).length > 0) {
-            // Using 'beacon' might be more reliable for onbeforeunload, but this is a simple cleanup
             supabase.from('rooms').update(updatePayload).eq('id', currentRoomId).then();
         }
       }
@@ -456,8 +431,18 @@ export default function HomePage() {
     }
   };
 
-  const yourMove = playerRole && roomData ? (playerRole === 'player1' ? roomData.player1_move : roomData.player2_move) : null;
-  const opponentMove = playerRole && roomData ? (playerRole === 'player1' ? roomData.player2_move : roomData.player1_move) : null;
+  const yourActualMove = playerRole && roomData ? (playerRole === 'player1' ? roomData.player1_move : roomData.player2_move) : null;
+  const opponentActualMove = playerRole && roomData ? (playerRole === 'player1' ? roomData.player2_move : roomData.player1_move) : null;
+  
+  let displayedOpponentMove: Move | null = null;
+  if (roomData && playerRole) {
+    if (gamePhase === 'result') {
+      displayedOpponentMove = opponentActualMove;
+    }
+    // In 'playing' phase (and others), opponent's actual move is not shown directly.
+    // It will be null, and MoveDisplay will show a placeholder.
+    // The isLoading prop on opponent's MoveDisplay handles the spinner if their move is still pending in DB.
+  }
   
   const yourScore = playerRole && roomData ? (playerRole === 'player1' ? roomData.player1_score : roomData.player2_score) : 0;
   const opponentScore = playerRole && roomData ? (playerRole === 'player1' ? roomData.player2_score : roomData.player1_score) : 0;
@@ -507,7 +492,7 @@ export default function HomePage() {
               <span className="text-muted-foreground">OR</span>
               <hr className="flex-grow border-border" />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-3">
               <Input 
                 type="text" 
                 placeholder="Enter Room ID" 
@@ -521,8 +506,8 @@ export default function HomePage() {
               </Button>
             </div>
           </CardContent>
+         {userId && <p className="mt-4 text-xs text-center text-muted-foreground">Your User ID: {userId}</p>}
         </Card>
-         {userId && <p className="mt-4 text-xs text-muted-foreground">Your User ID: {userId}</p>}
       </div>
     );
   }
@@ -530,15 +515,23 @@ export default function HomePage() {
   if (gamePhase === 'waitingForOpponent' && currentRoomId) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
-        <h1 className="text-3xl sm:text-4xl font-headline font-bold mb-2 text-center">Room: {currentRoomId}</h1>
-        <Button onClick={copyRoomId} variant="ghost" size="sm" className="mb-4 text-primary">
-            Copy Room ID <Copy className="ml-2 h-4 w-4"/>
-        </Button>
-        <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
-        <p className="text-xl text-muted-foreground mb-8">Waiting for Player 2 to join...</p>
-        <Button onClick={handleLeaveRoom} variant="outline" className="rounded-lg shadow-md" disabled={isLoading && roomData?.status === 'waitingForOpponent'}>
-          {isLoading && roomData?.status === 'waitingForOpponent' ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2" />} Close Room
-        </Button>
+        <Card className="w-full max-w-md p-6 md:p-8 shadow-xl rounded-xl text-center">
+          <CardHeader className="p-0 mb-4">
+            <CardTitle className="text-2xl md:text-3xl font-semibold">Room: {currentRoomId}</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0 space-y-6">
+            <Button onClick={copyRoomId} variant="outline" className="w-full py-3 text-md">
+              <Copy className="mr-2 h-4 w-4" /> Copy Room ID 
+            </Button>
+            <div className="flex items-center justify-center space-x-2 py-4">
+              <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              <p className="text-xl text-muted-foreground">Waiting for Player 2 to join...</p>
+            </div>
+            <Button onClick={handleLeaveRoom} variant="destructive" className="w-full py-3 text-md" disabled={isLoading}>
+              {isLoading && roomData?.status === 'waitingForOpponent' ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2"/>} Close Room
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -546,38 +539,31 @@ export default function HomePage() {
   if (gamePhase === 'opponentLeft') {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
-        <h1 className="text-3xl sm:text-4xl font-headline font-bold mb-6 text-center">Opponent Left</h1>
-        <p className="text-xl text-muted-foreground mb-8">Your opponent has disconnected from the room.</p>
-         <Button onClick={handleLeaveRoom} variant="default" className="rounded-lg shadow-md mb-4">
-          Leave Room & Return to Lobby
-        </Button>
-        {playerRole === 'player1' && roomData && ( 
-            <Button 
-                onClick={async () => {
-                    if(currentRoomId) {
-                        setIsLoading(true);
-                        const {error} = await supabase.from('rooms').update({ 
-                            player2_id: null, 
-                            player2_move: null, 
-                            status: 'waitingForOpponent', 
-                            player2_online: false,
-                            player2_score: 0, 
-                            round: 1, 
-                            last_activity: new Date().toISOString()
-                        }).eq('id', currentRoomId);
-                        setIsLoading(false);
-                        if (error) {
-                            toast({title: "Error", description: "Could not reset room to wait for new opponent.", variant: "destructive"});
-                        }
-                    }
+        <Card className="w-full max-w-md p-6 md:p-8 shadow-xl rounded-xl text-center">
+          <CardHeader className="p-0 mb-4">
+            <CardTitle className="text-2xl md:text-3xl font-semibold text-destructive">Opponent Left</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0 space-y-6">
+            <p className="text-lg text-muted-foreground">Your opponent has disconnected from the room.</p>
+           <Button onClick={handleLeaveRoom} variant="outline" className="w-full py-3 text-md" disabled={isLoading}>
+            {isLoading ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2"/>} Leave Room & Return to Lobby
+           </Button>
+            {playerRole === 'player1' && roomData && ( 
+              <Button 
+                onClick={() => { /* Player 1 might want to re-wait or close */
+                  supabase.from('rooms').update({ status: 'waitingForOpponent', player2_id: null, player2_move: null, player2_online: false }).eq('id', currentRoomId).then(() => {
+                    toast({ title: "Room Open Again", description: "Waiting for a new Player 2."});
+                  });
                 }} 
-                variant="outline" 
-                className="rounded-lg shadow-md"
+                variant="secondary" 
+                className="w-full py-3 text-md" 
                 disabled={isLoading}
-            >
-                {isLoading ? <Loader2 className="mr-2 animate-spin" /> : "Wait for New Opponent"}
-            </Button>
-        )}
+              >
+                {isLoading ? <Loader2 className="mr-2 animate-spin" /> : "Re-open Room for New Player"}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -585,8 +571,8 @@ export default function HomePage() {
   if ((isLoading && !roomData && currentRoomId) || (!roomData && currentRoomId && gamePhase !== 'lobby')) { 
      return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
-        <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
-        <p className="text-xl text-muted-foreground">Loading room data for {currentRoomId}...</p>
+          <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
+          <p className="text-xl text-muted-foreground">Loading room data for {currentRoomId}...</p>
       </div>
     );
   }
@@ -596,8 +582,8 @@ export default function HomePage() {
     setGamePhase('lobby'); 
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
-        <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
-        <p className="text-xl text-muted-foreground">Resetting to lobby...</p>
+          <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
+          <p className="text-xl text-muted-foreground">Resetting to lobby...</p>
       </div>
     );
   }
@@ -614,102 +600,92 @@ export default function HomePage() {
   const showMoveButtons = roomData.status === 'playing' && canMakeMove;
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4 relative overflow-hidden">
-      <div className="absolute top-4 right-4 flex items-center space-x-2 md:space-x-4">
-        <span className="text-xs md:text-sm font-medium text-muted-foreground">Room: <strong className="text-foreground">{currentRoomId}</strong></span>
-        <Button onClick={copyRoomId} variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary">
-            <Copy className="h-4 w-4"/> <span className="sr-only">Copy Room ID</span>
-        </Button>
-        <Button 
-          onClick={handleLeaveRoom} 
-          variant="ghost" 
-          size="sm" 
-          className="text-muted-foreground hover:text-destructive" 
-          disabled={isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft')}
-        >
-          {(isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft')) ? <Loader2 className="animate-spin h-4 w-4" /> : <LogOut className="mr-1 h-4 w-4" />} Leave
-        </Button>
+    <div className="flex flex-col items-center min-h-screen bg-background text-foreground p-4 md:p-8">
+      <div className="w-full max-w-4xl mx-auto">
+        <header className="flex justify-between items-center mb-6 md:mb-10">
+          <div className="flex items-center space-x-2">
+            <Button onClick={copyRoomId} variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+                <Copy className="mr-2 h-4 w-4" /> Room: {currentRoomId}
+            </Button>
+          </div>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-headline font-bold text-center tracking-tight flex-1">RPS Realtime Duel</h1>
+          <Button onClick={handleLeaveRoom} variant="outline" size="sm" className="text-destructive-foreground bg-destructive hover:bg-destructive/90" disabled={isLoading}>
+            {(isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft')) ? <Loader2 className="animate-spin" /> : <LogOut/>} Leave
+          </Button>
+        </header>
       </div>
-      <h1 className="text-4xl sm:text-5xl md:text-6xl font-headline font-extrabold mb-6 md:mb-10 text-center tracking-tight"
-          style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.1)' }}>
-        RPS Realtime Duel
-      </h1>
       
       <ScoreBoard 
-        player1Score={roomData.player1_score} 
-        player2Score={roomData.player2_score}
-        player1Name={playerRole === 'player1' ? "You (P1)" : "Player 1"}
-        player2Name={playerRole === 'player2' ? "You (P2)" : (roomData.player2_id ? "Player 2" : "Waiting...")}
+        player1Score={yourScore} 
+        player2Score={opponentScore}
+        player1Name={selfPlayerName}
+        player2Name={opponentPlayerName}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-10 my-6 md:my-8 w-full max-w-5xl items-start">
-        <Card className="flex flex-col items-center p-4 md:p-6 shadow-xl rounded-xl">
-          <h2 className="text-2xl md:text-3xl font-headline font-semibold mb-4">{selfPlayerName}</h2>
+      <main className="flex flex-col md:flex-row items-center md:items-start justify-around w-full max-w-3xl space-y-8 md:space-y-0 md:space-x-12">
+        {/* Your Side */}
+        <div className="flex flex-col items-center space-y-4">
+          <h2 className="text-2xl font-semibold">{selfPlayerName}</h2>
           <MoveDisplay 
-            move={yourMove} 
-            placeholderType={'user'}
-            highlightColor={displayResult === 'Win' ? 'hsl(var(--accent))' : (displayResult === 'Lose' ? 'hsl(var(--destructive))' : undefined)}
+            move={yourActualMove} 
+            isLoading={isLoading && !yourActualMove && gamePhase === 'playing'}
             isPlayerSide={true}
+            highlightColor={yourActualMove && gamePhase === 'result' ? (displayResult === 'Win' ? 'hsl(var(--accent))' : (displayResult === 'Lose' ? 'hsl(var(--destructive))' : undefined)) : undefined}
           />
-        </Card>
-
-        <div className="flex flex-col items-center justify-start md:justify-center md:order-none order-last md:min-h-[300px] pt-4 md:pt-0">
-          {isLoading && (gamePhase === 'playing' || gamePhase === 'reveal') && !(showWaitingForOpponentMove || showWaitingForYourMove || gamePhase === 'result') && (
-              <div className="flex flex-col items-center text-center py-10">
-                <Loader2 className="w-16 h-16 animate-spin text-primary mb-3" />
-                <p className="text-muted-foreground text-lg">Processing...</p>
-              </div>
-          )}
-
-          {showMoveButtons && !isLoading && (
-            <div className="flex flex-col items-center space-y-3 w-full">
-              <p className="text-lg md:text-xl mb-2 text-center">Choose your move:</p>
-              <MoveButton move="Rock" onClick={() => handlePlayerSelectMove('Rock')} disabled={isLoading && roomData.status === 'playing'}/>
-              <MoveButton move="Paper" onClick={() => handlePlayerSelectMove('Paper')} disabled={isLoading && roomData.status === 'playing'}/>
-              <MoveButton move="Scissors" onClick={() => handlePlayerSelectMove('Scissors')} disabled={isLoading && roomData.status === 'playing'}/>
+           {showMoveButtons && (
+            <div className="flex flex-col sm:flex-row gap-3 mt-4">
+              {(['Rock', 'Paper', 'Scissors'] as Move[]).map((move) => (
+                <MoveButton
+                  key={move}
+                  move={move}
+                  onClick={handlePlayerSelectMove}
+                  disabled={isLoading || !canMakeMove}
+                />
+              ))}
             </div>
           )}
-          
-          {showWaitingForYourMove && !isLoading && (
-             <p className="text-muted-foreground text-lg text-center py-10">Your turn to move...</p>
-          )}
-
-          {showWaitingForOpponentMove && !isLoading && (
-            <div className="flex flex-col items-center text-center py-10">
-              <Loader2 className="w-12 h-12 animate-spin text-primary mb-3" />
-              <p className="text-muted-foreground text-lg">Waiting for {opponentPlayerName}'s move...</p>
+          {gamePhase === 'playing' && !canMakeMove && yourActualMove && <p className="text-muted-foreground mt-2">Waiting for opponent...</p>}
+           {showWaitingForYourMove && (
+            <div className="text-center p-4 border-2 border-dashed border-primary rounded-lg mt-2">
+                <p className="text-lg font-semibold text-primary animate-pulse"> Your turn to move...</p>
             </div>
-          )}
-          
-          {gamePhase === 'result' && displayResult && (
-             <ResultDisplay result={displayResult} playerRole={playerRole} />
-          )}
-
-          {gamePhase === 'result' && (
-            <Button 
-              onClick={handlePlayAgain} 
-              className="mt-6 md:mt-8 w-full md:w-auto px-8 py-6 text-lg rounded-lg shadow-md hover:shadow-lg transition-shadow" 
-              variant="default"
-              disabled={(isLoading && roomData.status === 'result') || (playerRole === 'player2' && roomData.status === 'result')}
-            >
-              {(isLoading && roomData.status === 'result') ? <Loader2 className="mr-2 animate-spin" /> : (playerRole === 'player1' ? "Play Again" : "Waiting for Host...")}
-            </Button>
           )}
         </div>
 
-        <Card className="flex flex-col items-center p-4 md:p-6 shadow-xl rounded-xl">
-          <h2 className="text-2xl md:text-3xl font-headline font-semibold mb-4">{opponentPlayerName}</h2>
+        {/* Result or Waiting Message Area */}
+        <div className="flex flex-col items-center justify-center pt-0 md:pt-24 order-first md:order-none">
+           {gamePhase === 'result' && displayResult && (
+            <ResultDisplay result={displayResult} playerRole={playerRole} />
+          )}
+          {showWaitingForOpponentMove && (
+            <div className="text-center p-4 bg-card rounded-lg shadow-md mt-2">
+              <Loader2 className="w-6 h-6 animate-spin text-primary mb-2 mx-auto" />
+              <p className="text-md font-semibold text-muted-foreground">Waiting for {opponentPlayerName}'s move...</p>
+            </div>
+          )}
+          {gamePhase === 'result' && roomData && playerRole === 'player1' && (
+            <Button onClick={handlePlayAgain} className="mt-4 py-3 px-6 text-lg" disabled={isLoading}>
+              {(isLoading && roomData.status === 'result') ? <Loader2 className="mr-2 animate-spin" /> : (playerRole === 'player1' ? "Play Again" : "Waiting for Host...")}
+            </Button>
+          )}
+           {gamePhase === 'result' && roomData && playerRole === 'player2' && (
+             <p className="mt-4 text-muted-foreground">Waiting for Host to start next round...</p>
+           )}
+        </div>
+
+        {/* Opponent's Side */}
+        <div className="flex flex-col items-center space-y-4">
+          <h2 className="text-2xl font-semibold">{opponentPlayerName}</h2>
           <MoveDisplay 
-            move={opponentMove} 
-            placeholderType={'ai'} 
-            isLoading={gamePhase === 'playing' && ((playerRole === 'player1' && !roomData.player2_move) || (playerRole === 'player2' && !roomData.player1_move))}
-            highlightColor={displayResult === 'Lose' ? 'hsl(var(--accent))' : (displayResult === 'Win' ? 'hsl(var(--destructive))' : undefined)}
+            move={displayedOpponentMove} 
+            isLoading={gamePhase === 'playing' && roomData && (playerRole === 'player1' ? !roomData.player2_move : !roomData.player1_move) && !!(playerRole === 'player1' ? roomData.player2_id : roomData.player1_id)}
             isPlayerSide={false}
+            highlightColor={displayedOpponentMove && gamePhase === 'result' ? (displayResult === 'Lose' ? 'hsl(var(--accent))' : (displayResult === 'Win' ? 'hsl(var(--destructive))' : undefined)) : undefined}
           />
            {!roomData.player2_id && (roomData.status === 'waitingForOpponent' || (roomData.status === 'playing' && playerRole === 'player1' && !roomData.player2_id)) && 
-             <p className="text-xs text-muted-foreground mt-2">Waiting for opponent to join...</p>}
-        </Card>
-      </div>
+              <p className="text-muted-foreground mt-2">Waiting for opponent to join...</p>}
+        </div>
+      </main>
     </div>
   );
 }
