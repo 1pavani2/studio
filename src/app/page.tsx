@@ -17,7 +17,7 @@ import { ResultDisplay } from '@/components/game/ResultDisplay';
 import { Loader2, Users, LogOut, Copy } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 
-type GamePhase = 'lobby' | 'waitingForOpponent' | 'playing' | 'reveal' | 'result' | 'opponentLeft';
+type GamePhase = 'lobby' | 'waitingForOpponent' | 'playing' | 'reveal' | 'result' | 'opponentLeft' | 'gameOver';
 type PlayerRole = 'player1' | 'player2' | null;
 
 interface RoomData {
@@ -34,6 +34,8 @@ interface RoomData {
   player1_online?: boolean;
   player2_online?: boolean;
 }
+
+const WIN_SCORE = 3;
 
 const generateUserId = () => {
   // This function is intended to run client-side.
@@ -111,7 +113,7 @@ export default function HomePage() {
               setPlayerRole('player2');
             }
 
-            if (newRoomData.status !== 'lobby' && newRoomData.status !== 'waitingForOpponent') {
+            if (newRoomData.status !== 'lobby' && newRoomData.status !== 'waitingForOpponent' && newRoomData.status !== 'gameOver') {
               const currentRole = newRoomData.player1_id === userId ? 'player1' : (newRoomData.player2_id === userId ? 'player2' : null);
               if (currentRole === 'player1' && newRoomData.player2_id && !newRoomData.player2_online) {
                 setGamePhase('opponentLeft');
@@ -181,6 +183,7 @@ export default function HomePage() {
         }
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRoomId, userId, toast]); 
 
 
@@ -196,6 +199,7 @@ export default function HomePage() {
         if(error) console.error("Error updating online status:", error);
       });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRoomId, playerRole, roomData?.status, roomData?.player1_online, roomData?.player2_online, userId]);
 
 
@@ -386,9 +390,14 @@ export default function HomePage() {
       const updatePayload: Partial<RoomData> = {
         player1_score: newP1Score,
         player2_score: newP2Score,
-        status: 'result', 
         last_activity: new Date().toISOString()
       };
+
+      if (newP1Score >= WIN_SCORE || newP2Score >= WIN_SCORE) {
+        updatePayload.status = 'gameOver';
+      } else {
+        updatePayload.status = 'result';
+      }
 
       supabase
         .from('rooms')
@@ -398,39 +407,56 @@ export default function HomePage() {
         .then(({ error }) => {
           if (error) {
             toast({ title: "Error processing round", description: error.message, variant: "destructive" });
-            console.error("Failed to update result:", error);
+            console.error("Failed to update result/game over status:", error);
           }
         });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomData, currentRoomId, playerRole, toast, userId]);
 
 
   const handlePlayAgain = async () => {
     if (!currentRoomId || !roomData || playerRole !== 'player1' || !userId) { 
         if(playerRole === 'player2'){
-            toast({title: "Waiting for Host", description: "Player 1 (Host) can start the next round."});
+            toast({title: "Waiting for Host", description: "Host can start the next round/game."});
         }
         return;
     }
     setIsLoading(true);
     try {
-      const { error } = await supabase
-        .from('rooms')
-        .update({
+      let updatePayload: Partial<RoomData>;
+      if (roomData.status === 'gameOver') { 
+        updatePayload = {
+          player1_move: null,
+          player2_move: null,
+          player1_score: 0,
+          player2_score: 0,
+          status: 'playing', 
+          round: 1,
+          last_activity: new Date().toISOString()
+        };
+      } else { 
+        updatePayload = {
           player1_move: null,
           player2_move: null,
           status: 'playing', 
           round: roomData.round + 1,
           last_activity: new Date().toISOString()
-        })
+        };
+      }
+
+      const { error } = await supabase
+        .from('rooms')
+        .update(updatePayload)
         .eq('id', currentRoomId);
+
       if (error) {
-        toast({ title: "Failed to start new round", description: error.message, variant: "destructive" });
-        console.error("Play again error:", error);
+        toast({ title: "Failed to start new round/game", description: error.message, variant: "destructive" });
+        console.error("Play again/new game error:", error);
       }
     } catch (error: any) {
-      toast({ title: "Error during play again", description: error.message, variant: "destructive" });
-      console.error("Play again error:", error);
+      toast({ title: "Error during play again/new game", description: error.message, variant: "destructive" });
+      console.error("Play again/new game error:", error);
     } finally {
       setIsLoading(false);
     }
@@ -449,14 +475,10 @@ export default function HomePage() {
   
   let displayedOpponentMove: Move | null = null;
   if (roomData && playerRole) {
-    if (gamePhase === 'result') {
+    if (gamePhase === 'result' || gamePhase === 'gameOver') {
       displayedOpponentMove = opponentActualMove;
     } else if (gamePhase === 'playing') {
-      // Show opponent's move placeholder if they have moved but game isn't 'result' yet
-      // This means opponentActualMove will be non-null if they've moved
-      // but we still pass null to MoveDisplay to hide it.
-      // The isLoading prop on MoveDisplay handles showing a spinner if their move is still pending from DB.
-      displayedOpponentMove = null;
+      displayedOpponentMove = null; 
     }
   }
   
@@ -464,7 +486,7 @@ export default function HomePage() {
   const opponentScore = playerRole && roomData ? (playerRole === 'player1' ? roomData.player2_score : roomData.player1_score) : 0;
   
   let displayResult: Result = null;
-  if (roomData && roomData.player1_move && roomData.player2_move && roomData.status === 'result') {
+  if (roomData && roomData.player1_move && roomData.player2_move && (roomData.status === 'result' || roomData.status === 'gameOver')) {
     const p1Result = determineWinner(roomData.player1_move, roomData.player2_move);
     if (playerRole === 'player1') {
       displayResult = p1Result;
@@ -632,18 +654,18 @@ export default function HomePage() {
                 <Loader2 className="h-4 w-4 animate-spin" /> : 
                 <LogOut className="h-4 w-4" />
               }
-              <span className="hidden sm:inline">Leave</span>
+              <span className="hidden sm:inline ml-1">Leave</span>
             </Button>
           </div>
           
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-headline font-bold text-center tracking-tight w-full px-12 sm:px-16 md:px-20">
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-headline font-bold text-center tracking-tight w-full">
             RPS Realtime Duel
           </h1>
 
           <div className="mt-2 md:mt-3">
             <Button onClick={copyRoomId} variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
-                <Copy className="h-4 w-4" />
-                Room: {currentRoomId}
+                <Copy className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                <span className="text-xs sm:text-sm">Room: {currentRoomId}</span>
             </Button>
           </div>
         </header>
@@ -664,7 +686,7 @@ export default function HomePage() {
             move={yourActualMove} 
             isLoading={isLoading && !yourActualMove && gamePhase === 'playing'}
             isPlayerSide={true}
-            highlightColor={yourActualMove && gamePhase === 'result' ? (displayResult === 'Win' ? 'hsl(var(--accent))' : (displayResult === 'Lose' ? 'hsl(var(--destructive))' : undefined)) : undefined}
+            highlightColor={yourActualMove && (gamePhase === 'result' || gamePhase === 'gameOver') ? (displayResult === 'Win' ? 'hsl(var(--accent))' : (displayResult === 'Lose' ? 'hsl(var(--destructive))' : undefined)) : undefined}
           />
            {showMoveButtons && (
             <div className="flex flex-col sm:flex-row gap-3 mt-4">
@@ -691,15 +713,41 @@ export default function HomePage() {
            {gamePhase === 'result' && displayResult && (
             <ResultDisplay result={displayResult} playerRole={playerRole} />
           )}
-          {showWaitingForOpponentMove && (
+
+          {gamePhase === 'gameOver' && roomData && (
+            <div className="text-center my-6">
+              <h2 className="text-4xl md:text-5xl font-bold font-headline text-primary mb-2 animate-bounce">
+                Game Over!
+              </h2>
+              <p className="text-2xl md:text-3xl font-semibold mb-4">
+                {roomData.player1_score >= WIN_SCORE && playerRole === 'player1' && "You are the Champion!"}
+                {roomData.player1_score >= WIN_SCORE && playerRole === 'player2' && `${opponentPlayerName} is the Champion!`}
+                {roomData.player2_score >= WIN_SCORE && playerRole === 'player2' && "You are the Champion!"}
+                {roomData.player2_score >= WIN_SCORE && playerRole === 'player1' && `${opponentPlayerName} is the Champion!`}
+              </p>
+              {displayResult && <p className="text-lg text-muted-foreground mb-4">(Last round: {displayResult})</p>}
+              
+              {playerRole === 'player1' && (
+                <Button onClick={handlePlayAgain} className="mt-2 py-3 px-6 text-lg" disabled={isLoading}>
+                  {isLoading ? <Loader2 className="mr-2 animate-spin" /> : "Start New Game"}
+                </Button>
+              )}
+              {playerRole === 'player2' && (
+                <p className="mt-2 text-muted-foreground">Waiting for Host to start a new game...</p>
+              )}
+            </div>
+          )}
+
+          {showWaitingForOpponentMove && gamePhase !== 'gameOver' && (
             <div className="text-center p-4 bg-card rounded-lg shadow-md mt-2">
               <Loader2 className="w-6 h-6 animate-spin text-primary mb-2 mx-auto" />
               <p className="text-md font-semibold text-muted-foreground">Waiting for {opponentPlayerName}'s move...</p>
             </div>
           )}
+
           {gamePhase === 'result' && roomData && playerRole === 'player1' && (
             <Button onClick={handlePlayAgain} className="mt-4 py-3 px-6 text-lg" disabled={isLoading}>
-              {(isLoading && roomData.status === 'result') ? <Loader2 className="mr-2 animate-spin" /> : (playerRole === 'player1' ? "Play Again" : "Waiting for Host...")}
+              {(isLoading && roomData.status === 'result') ? <Loader2 className="mr-2 animate-spin" /> : "Play Next Round"}
             </Button>
           )}
            {gamePhase === 'result' && roomData && playerRole === 'player2' && (
@@ -714,7 +762,7 @@ export default function HomePage() {
             move={displayedOpponentMove} 
             isLoading={gamePhase === 'playing' && roomData && (playerRole === 'player1' ? !roomData.player2_move : !roomData.player1_move) && !!(playerRole === 'player1' ? roomData.player2_id : roomData.player1_id)}
             isPlayerSide={false}
-            highlightColor={displayedOpponentMove && gamePhase === 'result' ? (displayResult === 'Lose' ? 'hsl(var(--accent))' : (displayResult === 'Win' ? 'hsl(var(--destructive))' : undefined)) : undefined}
+            highlightColor={displayedOpponentMove && (gamePhase === 'result' || gamePhase === 'gameOver') ? (displayResult === 'Lose' ? 'hsl(var(--accent))' : (displayResult === 'Win' ? 'hsl(var(--destructive))' : undefined)) : undefined}
           />
            {!roomData.player2_id && (roomData.status === 'waitingForOpponent' || (roomData.status === 'playing' && playerRole === 'player1' && !roomData.player2_id)) && 
               <p className="text-muted-foreground mt-2">Waiting for opponent to join...</p>}
@@ -723,3 +771,6 @@ export default function HomePage() {
     </div>
   );
 }
+
+
+    
