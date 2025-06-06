@@ -34,9 +34,7 @@ import { useToast } from "@/hooks/use-toast";
 // - player2_online: BOOLEAN (default false)
 //
 // Also, ensure you have appropriate Row Level Security (RLS) policies enabled
-// for the 'rooms' table to allow reads and writes as needed by your application.
-// For example, allow public read, and allow authenticated users (or users matching player_id) to write.
-// Start with broad RLS policies for testing and refine them for production.
+// for the 'rooms' table and that REALTIME is enabled for the table in Supabase Dashboard (Database > Replication).
 
 type GamePhase = 'lobby' | 'waitingForOpponent' | 'playing' | 'reveal' | 'result' | 'opponentLeft';
 type PlayerRole = 'player1' | 'player2' | null;
@@ -56,7 +54,7 @@ interface RoomData {
   player2_online?: boolean;
 }
 
-const generateUserIdClientSide = () => {
+const generateUserId = () => {
   let userId = localStorage.getItem('rpsUserId');
   if (!userId) {
     userId = Math.random().toString(36).substring(2, 15);
@@ -73,30 +71,28 @@ export default function HomePage() {
   
   const [roomData, setRoomData] = useState<RoomData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true); // For initial user ID generation
+  const [initialLoading, setInitialLoading] = useState(true);
   const [gamePhase, setGamePhase] = useState<GamePhase>('lobby');
   const [supabaseChannel, setSupabaseChannel] = useState<RealtimeChannel | null>(null);
 
   const { toast } = useToast();
 
   useEffect(() => {
-    setUserId(generateUserIdClientSide());
+    setUserId(generateUserId());
     setInitialLoading(false);
   }, []);
 
   const resetLocalGameStates = useCallback(() => {
     setPlayerRole(null);
-    // gamePhase will be reset by roomData listener or explicitly
   }, []);
 
-  // Subscribe to room data with Supabase Realtime
   useEffect(() => {
-    if (!currentRoomId || !userId) { // Ensure userId is available
+    if (!currentRoomId || !userId) { 
       if (supabaseChannel) {
         supabaseChannel.unsubscribe();
         setSupabaseChannel(null);
       }
-      if (roomData) setRoomData(null); // Clear room data if no current room
+      if (roomData) setRoomData(null); 
       return;
     }
 
@@ -107,7 +103,9 @@ export default function HomePage() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'rooms', filter: `id=eq.${currentRoomId}` },
         (payload) => {
-          setIsLoading(false);
+          // For realtime updates, we typically don't set isLoading to false here,
+          // as it's for ongoing changes, not an initial load.
+          // setIsLoading(false); 
           if (payload.eventType === 'DELETE') {
             toast({ title: "Room Closed", description: "The room has been closed.", variant: "destructive" });
             setCurrentRoomId(null);
@@ -127,7 +125,6 @@ export default function HomePage() {
               setPlayerRole('player2');
             }
 
-            // Check for opponent leaving (based on online status)
             if (newRoomData.status !== 'lobby' && newRoomData.status !== 'waitingForOpponent') {
               const currentRole = newRoomData.player1_id === userId ? 'player1' : (newRoomData.player2_id === userId ? 'player2' : null);
               if (currentRole === 'player1' && newRoomData.player2_id && !newRoomData.player2_online) {
@@ -136,23 +133,21 @@ export default function HomePage() {
                  setGamePhase('opponentLeft');
               }
             }
-
           } else if (payload.eventType !== 'DELETE') { 
-            toast({ title: "Room not found", description: "The room may have been deleted or the ID is incorrect.", variant: "destructive" });
-            setCurrentRoomId(null);
-            setRoomData(null);
-            setPlayerRole(null);
-            setGamePhase('lobby');
+            // This condition might need refinement based on actual payloads when RLS restricts data.
+            // For now, let's assume if new is empty and not delete, it's a potential issue.
+            // Fetching the room again might be an option or simply logging.
+            console.warn("Received a non-DELETE Realtime event with no new data for room:", currentRoomId, payload);
           }
         }
       )
-      .subscribe(async (status) => {
+      .subscribe(async (status, err) => {
         if (status === 'SUBSCRIBED') {
           const { data, error } = await supabase.from('rooms').select('*').eq('id', currentRoomId).single();
           setIsLoading(false);
           if (error || !data) {
             console.error("Error fetching initial room data or room not found:", error);
-            toast({ title: "Room not found", description: "Could not load room details.", variant: "destructive" });
+            toast({ title: "Room not found", description: "Could not load room details. The room may not exist or RLS policies might be blocking access.", variant: "destructive" });
             setCurrentRoomId(null); 
             setGamePhase('lobby');
           } else {
@@ -164,10 +159,19 @@ export default function HomePage() {
               setPlayerRole('player2');
             }
           }
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        } else if (status === 'CHANNEL_ERROR') {
           setIsLoading(false);
-          console.error("Supabase channel error or timed out: ", status);
-          toast({ title: "Connection Error", description: "Could not connect to real-time service for the room.", variant: "destructive" });
+          console.error("Supabase channel error: ", status, err);
+          toast({ 
+            title: "Realtime Connection Error", 
+            description: "Could not connect to real-time service. Please check Supabase dashboard: ensure Realtime is enabled for 'rooms' table and RLS policies allow access.", 
+            variant: "destructive",
+            duration: 10000 // Longer duration for important messages
+          });
+        } else if (status === 'TIMED_OUT') {
+          setIsLoading(false);
+          console.error("Supabase channel subscription timed out: ", status);
+          toast({ title: "Connection Timeout", description: "Real-time connection timed out. Please try again.", variant: "destructive" });
         }
       });
 
@@ -175,43 +179,46 @@ export default function HomePage() {
 
     return () => {
       if (channel) {
-        supabase.removeChannel(channel).then(() => {
-            // console.log('Unsubscribed from room channel:', currentRoomId);
+        supabase.removeChannel(channel).then((status) => {
+            // console.log('Unsubscribed from room channel:', currentRoomId, status);
         });
       }
-      if (currentRoomId && playerRole && userId) { // Ensure userId exists
+      if (currentRoomId && playerRole && userId) {
         const updatePayload: Partial<RoomData> = {};
         if (playerRole === 'player1') updatePayload.player1_online = false;
         if (playerRole === 'player2') updatePayload.player2_online = false;
-        supabase.from('rooms').update(updatePayload).eq('id', currentRoomId).then();
+        
+        if (Object.keys(updatePayload).length > 0) {
+            supabase.from('rooms').update(updatePayload).eq('id', currentRoomId).then();
+        }
       }
     };
-  }, [currentRoomId, userId, toast]);
+  }, [currentRoomId, userId, toast]); // playerRole removed from deps to avoid re-subscribing when role changes due to data
 
 
   useEffect(() => {
-    if (!currentRoomId || !playerRole || !roomData || !userId) return; // Ensure userId exists
+    if (!currentRoomId || !playerRole || !roomData || !userId) return; 
     
     const onlineUpdate: Partial<RoomData> = {};
-    if (playerRole === 'player1') onlineUpdate.player1_online = true;
-    if (playerRole === 'player2') onlineUpdate.player2_online = true;
+    if (playerRole === 'player1' && roomData.player1_online !== true) onlineUpdate.player1_online = true;
+    if (playerRole === 'player2' && roomData.player2_online !== true) onlineUpdate.player2_online = true;
 
     if (Object.keys(onlineUpdate).length > 0) {
-      supabase.from('rooms').update(onlineUpdate).eq('id', currentRoomId).then(({error}) => {
+      supabase.from('rooms').update({...onlineUpdate, last_activity: new Date().toISOString()}).eq('id', currentRoomId).then(({error}) => {
         if(error) console.error("Error updating online status:", error);
       });
     }
-  }, [currentRoomId, playerRole, roomData?.status, userId]); 
+  }, [currentRoomId, playerRole, roomData?.status, roomData?.player1_online, roomData?.player2_online, userId]); // Added roomData online states to dependencies
 
 
   const handleCreateRoom = async () => {
-    if (!userId) { // Ensure userId is available
+    if (!userId) { 
       toast({ title: "User ID not available", description: "Please wait or refresh the page.", variant: "destructive" });
       return;
     }
     setIsLoading(true);
     const newRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const initialRoomData: Omit<RoomData, 'id' | 'created_at' | 'last_activity'> & { id: string } = {
+    const initialRoomData: Omit<RoomData, 'created_at' | 'last_activity'> = {
       id: newRoomId,
       player1_id: userId,
       player2_id: null,
@@ -228,18 +235,18 @@ export default function HomePage() {
       const { error } = await supabase.from('rooms').insert(initialRoomData);
       if (error) throw error;
       setCurrentRoomId(newRoomId);
-      setPlayerRole('player1');
-      setGamePhase('waitingForOpponent');
+      // setPlayerRole('player1'); // Role will be set by the realtime listener/initial fetch
+      // setGamePhase('waitingForOpponent'); // Phase will be set by realtime listener/initial fetch
     } catch (error: any) {
       toast({ title: "Failed to create room", description: error.message, variant: "destructive" });
       console.error("Create room error:", error);
     } finally {
-      setIsLoading(false);
+      setIsLoading(false); // Set to false here, subscription will handle the rest
     }
   };
 
   const handleJoinRoom = async () => {
-    if (!userId) { // Ensure userId is available
+    if (!userId) {
        toast({ title: "User ID not available", description: "Please wait or refresh the page.", variant: "destructive" });
       return;
     }
@@ -258,14 +265,14 @@ export default function HomePage() {
         .single();
 
       if (fetchError || !roomToJoin) {
-        toast({ title: "Room not found", description: `Room ${prospectiveRoomId} does not exist.`, variant: "destructive" });
+        toast({ title: "Room not found", description: `Room ${prospectiveRoomId} does not exist. Check ID or RLS policies.`, variant: "destructive" });
         setIsLoading(false);
         return;
       }
 
       if (roomToJoin.player1_id === userId) { 
         setCurrentRoomId(prospectiveRoomId); 
-        setPlayerRole('player1');
+        // setPlayerRole('player1'); // Role set by listener
         setIsLoading(false);
         return;
       }
@@ -288,36 +295,40 @@ export default function HomePage() {
         .is('player2_id', null); 
 
       if (updateError) {
+        // Check if room became full just before this user tried to join
         const { data: refetchedRoom } = await supabase.from('rooms').select('player2_id').eq('id', prospectiveRoomId).single();
         if (refetchedRoom && refetchedRoom.player2_id !== null && refetchedRoom.player2_id !== userId) {
              toast({ title: "Room is full", description: "Another player joined just before you.", variant: "destructive" });
         } else {
-            throw updateError;
+            throw updateError; // Otherwise, it's a different error
         }
         setIsLoading(false);
         return;
       }
       
       setCurrentRoomId(prospectiveRoomId);
-      setPlayerRole('player2');
+      // setPlayerRole('player2'); // Role set by listener
     } catch (error: any) {
       console.error("Join room failed:", error);
       toast({ title: "Failed to join room", description: error.message, variant: "destructive" });
+    } finally {
+        // setIsLoading(false); // isLoading should be managed by the subscription effect primarily
     }
   };
 
   const handleLeaveRoom = async () => {
-    if (!currentRoomId || !playerRole || !userId) return; // Ensure userId is available
+    if (!currentRoomId || !playerRole || !userId) return; 
     setIsLoading(true);
 
+    const previousRoomId = currentRoomId; 
+    const previousPlayerRole = playerRole;
+    
+    // Unsubscribe first
     if (supabaseChannel) {
       await supabase.removeChannel(supabaseChannel);
       setSupabaseChannel(null);
     }
     
-    const previousRoomId = currentRoomId; 
-    const previousPlayerRole = playerRole;
-
     setCurrentRoomId(null);
     setPlayerRole(null);
     setRoomData(null);
@@ -327,10 +338,12 @@ export default function HomePage() {
 
     try {
       if (previousPlayerRole === 'player1') {
+        // Player 1 deletes the room
         const { error } = await supabase.from('rooms').delete().eq('id', previousRoomId);
         if (error) throw error;
         toast({ title: "Room Closed", description: "You have left and closed the room."});
       } else { 
+        // Player 2 leaves, room becomes waiting for opponent
         const { error } = await supabase
           .from('rooms')
           .update({
@@ -353,7 +366,7 @@ export default function HomePage() {
   };
 
   const handlePlayerSelectMove = async (move: Move) => {
-    if (!currentRoomId || !playerRole || !roomData || roomData.status !== 'playing' || !userId) return; // Ensure userId
+    if (!currentRoomId || !playerRole || !roomData || roomData.status !== 'playing' || !userId) return; 
     
     const playerMoveField = playerRole === 'player1' ? 'player1_move' : 'player2_move';
     if (roomData[playerMoveField] !== null) {
@@ -361,7 +374,7 @@ export default function HomePage() {
       return;
     }
 
-    setIsLoading(true);
+    setIsLoading(true); // Indicate loading while submitting move
     try {
       const updatePayload: Partial<RoomData> = { last_activity: new Date().toISOString() };
       updatePayload[playerMoveField] = move;
@@ -371,19 +384,23 @@ export default function HomePage() {
         .update(updatePayload)
         .eq('id', currentRoomId);
       if (error) throw error;
+      // Realtime update will handle new roomData, no need to setIsLoading(false) here typically
     } catch (error: any) {
       toast({ title: "Failed to make move", description: error.message, variant: "destructive" });
       console.error("Select move error:", error);
+      setIsLoading(false); // Set false on error
     } 
+    // setIsLoading(false) can be handled by the realtime update or if an error occurs
   };
 
   useEffect(() => {
-    if (!roomData || !currentRoomId || playerRole !== 'player1' || roomData.status !== 'playing' || !userId) return; // Ensure userId
+    // This effect should only be run by player1 to avoid race conditions / double updates
+    if (!roomData || !currentRoomId || playerRole !== 'player1' || roomData.status !== 'playing' || !userId) return;
 
     const { player1_move, player2_move, round } = roomData;
 
     if (player1_move && player2_move) {
-      setIsLoading(true); 
+      // setIsLoading(true); // Player 1 is processing the result
       
       const resultP1 = determineWinner(player1_move, player2_move);
       let newP1Score = roomData.player1_score;
@@ -395,7 +412,7 @@ export default function HomePage() {
       const updatePayload: Partial<RoomData> = {
         player1_score: newP1Score,
         player2_score: newP2Score,
-        status: 'result',
+        status: 'result', // Change status to result
         last_activity: new Date().toISOString()
       };
 
@@ -403,40 +420,43 @@ export default function HomePage() {
         .from('rooms')
         .update(updatePayload)
         .eq('id', currentRoomId)
-        .eq('round', round) 
+        .eq('round', round) // Ensure we're updating the correct round to prevent race conditions
         .then(({ error }) => {
           if (error) {
             toast({ title: "Error processing round", description: error.message, variant: "destructive" });
             console.error("Failed to update result:", error);
           }
+          // setIsLoading(false); // Result processing complete
         });
     }
   }, [roomData, currentRoomId, playerRole, toast, userId]);
 
 
   const handlePlayAgain = async () => {
-    if (!currentRoomId || !roomData || playerRole !== 'player1' || !userId) {  // Ensure userId
+    if (!currentRoomId || !roomData || playerRole !== 'player1' || !userId) { 
         if(playerRole === 'player2'){
             toast({title: "Waiting for Host", description: "Player 1 (Host) can start the next round."});
         }
         return;
     }
-    setIsLoading(true);
+    // setIsLoading(true);
     try {
       const { error } = await supabase
         .from('rooms')
         .update({
           player1_move: null,
           player2_move: null,
-          status: 'playing',
+          status: 'playing', // Reset status to playing
           round: roomData.round + 1,
           last_activity: new Date().toISOString()
         })
         .eq('id', currentRoomId);
       if (error) throw error;
+      // Realtime update will handle new phase, setIsLoading(false) might not be needed here
     } catch (error: any) {
       toast({ title: "Failed to start new round", description: error.message, variant: "destructive" });
       console.error("Play again error:", error);
+      // setIsLoading(false);
     }
   };
   
@@ -472,7 +492,9 @@ export default function HomePage() {
   const selfPlayerName = playerRole === 'player1' ? "Player 1 (You)" : (playerRole === 'player2' ? "Player 2 (You)" : "You");
   const opponentPlayerName = playerRole === 'player1' ? (roomData?.player2_id ? "Player 2" : "Opponent") : "Player 1";
 
-  if (initialLoading || (isLoading && !roomData && gamePhase === 'lobby' && !currentRoomId)) {
+
+  // Adjusted loading state logic
+  if (initialLoading || (isLoading && !currentRoomId && gamePhase === 'lobby')) {
      return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
         <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
@@ -527,8 +549,8 @@ export default function HomePage() {
         </Button>
         <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
         <p className="text-xl text-muted-foreground mb-8">Waiting for Player 2 to join...</p>
-        <Button onClick={handleLeaveRoom} variant="outline" className="rounded-lg shadow-md" disabled={isLoading && gamePhase === 'waitingForOpponent'}>
-          {isLoading && gamePhase === 'waitingForOpponent' ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2" />} Close Room
+        <Button onClick={handleLeaveRoom} variant="outline" className="rounded-lg shadow-md" disabled={isLoading && roomData?.status === 'waitingForOpponent'}>
+          {isLoading && roomData?.status === 'waitingForOpponent' ? <Loader2 className="mr-2 animate-spin" /> : <LogOut className="mr-2" />} Close Room
         </Button>
       </div>
     );
@@ -542,19 +564,25 @@ export default function HomePage() {
          <Button onClick={handleLeaveRoom} variant="default" className="rounded-lg shadow-md mb-4">
           Leave Room & Return to Lobby
         </Button>
-        {playerRole === 'player1' && (
+        {playerRole === 'player1' && roomData && ( // Ensure roomData exists for player1_online check
             <Button 
-                onClick={() => {
+                onClick={async () => {
                     if(currentRoomId) {
-                        supabase.from('rooms').update({ 
+                        const {error} = await supabase.from('rooms').update({ 
                             player2_id: null, 
                             player2_move: null, 
                             status: 'waitingForOpponent', 
                             player2_online: false,
+                            player2_score: 0, // Optionally reset P2 score
+                            round: 1, // Optionally reset round
                             last_activity: new Date().toISOString()
-                        }).eq('id', currentRoomId).then(() => {
-                            setGamePhase('waitingForOpponent'); 
-                        });
+                        }).eq('id', currentRoomId);
+
+                        if (error) {
+                            toast({title: "Error", description: "Could not reset room to wait for new opponent.", variant: "destructive"});
+                        } else {
+                           // Game phase will be updated by realtime subscription
+                        }
                     }
                 }} 
                 variant="outline" 
@@ -567,7 +595,7 @@ export default function HomePage() {
     );
   }
 
-  if (!roomData && currentRoomId) { 
+  if ((isLoading && !roomData && currentRoomId) || (!roomData && currentRoomId && gamePhase !== 'lobby')) { 
      return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
         <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
@@ -575,11 +603,22 @@ export default function HomePage() {
       </div>
     );
   }
+
   if (!roomData && !currentRoomId && gamePhase !== 'lobby') { 
+    // This case indicates a state inconsistency, try to reset to lobby.
+    // A useEffect could also handle this by setting gamePhase to 'lobby' if currentRoomId becomes null.
+    console.warn("State inconsistency: No roomData or currentRoomId, but not in lobby. Resetting to lobby.");
     setGamePhase('lobby'); 
-    return <p>Error: No room data and not in lobby. Resetting...</p>
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
+        <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
+        <p className="text-xl text-muted-foreground">Resetting to lobby...</p>
+      </div>
+    );
   }
-  if (!roomData || !userId) return null; 
+  if (!roomData || !userId) { // If still no roomData or userId (should be rare after loading states), render nothing or a fallback.
+    return null; 
+  }
   
   const showWaitingForOpponentMove = roomData.status === 'playing' && playerRole && 
     (playerRole === 'player1' ? roomData.player1_move && !roomData.player2_move : roomData.player2_move && !roomData.player1_move);
@@ -596,8 +635,14 @@ export default function HomePage() {
         <Button onClick={copyRoomId} variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary">
             <Copy className="h-4 w-4"/> <span className="sr-only">Copy Room ID</span>
         </Button>
-        <Button onClick={handleLeaveRoom} variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" disabled={isLoading && gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent'}>
-          {(isLoading && gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent') ? <Loader2 className="animate-spin h-4 w-4" /> : <LogOut className="mr-1 h-4 w-4" />} Leave
+        <Button 
+          onClick={handleLeaveRoom} 
+          variant="ghost" 
+          size="sm" 
+          className="text-muted-foreground hover:text-destructive" 
+          disabled={isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft')}
+        >
+          {(isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft')) ? <Loader2 className="animate-spin h-4 w-4" /> : <LogOut className="mr-1 h-4 w-4" />} Leave
         </Button>
       </div>
       <h1 className="text-4xl sm:text-5xl md:text-6xl font-headline font-extrabold mb-6 md:mb-10 text-center tracking-tight"
@@ -624,7 +669,14 @@ export default function HomePage() {
         </Card>
 
         <div className="flex flex-col items-center justify-start md:justify-center md:order-none order-last md:min-h-[300px] pt-4 md:pt-0">
-          {showMoveButtons && (
+          {isLoading && (gamePhase === 'playing' || gamePhase === 'reveal') && !(showWaitingForOpponentMove || showWaitingForYourMove || gamePhase === 'result') && (
+              <div className="flex flex-col items-center text-center py-10">
+                <Loader2 className="w-16 h-16 animate-spin text-primary mb-3" />
+                <p className="text-muted-foreground text-lg">Processing...</p>
+              </div>
+          )}
+
+          {showMoveButtons && !isLoading && (
             <div className="flex flex-col items-center space-y-3 w-full">
               <p className="text-lg md:text-xl mb-2 text-center">Choose your move:</p>
               <MoveButton move="Rock" onClick={() => handlePlayerSelectMove('Rock')} disabled={isLoading && roomData.status === 'playing'}/>
@@ -642,13 +694,6 @@ export default function HomePage() {
               <Loader2 className="w-12 h-12 animate-spin text-primary mb-3" />
               <p className="text-muted-foreground text-lg">Waiting for {opponentPlayerName}'s move...</p>
             </div>
-          )}
-          
-          {isLoading && (gamePhase === 'playing' || gamePhase === 'reveal') && !(gamePhase === 'result' || gamePhase === 'lobby' || gamePhase === 'waitingForOpponent') && (
-              <div className="flex flex-col items-center text-center py-10">
-                <Loader2 className="w-16 h-16 animate-spin text-primary mb-3" />
-                <p className="text-muted-foreground text-lg">Processing...</p>
-              </div>
           )}
           
           {gamePhase === 'result' && displayResult && (
@@ -683,4 +728,3 @@ export default function HomePage() {
     </div>
   );
 }
-
