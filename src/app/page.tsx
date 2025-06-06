@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useCallback } from 'react';
@@ -122,7 +123,7 @@ export default function HomePage() {
           setIsLoading(false);
           if (error || !data) {
             console.error("Error fetching initial room data or room not found:", error);
-            toast({ title: "Room not found", description: "Could not load room details. The room may not exist or RLS policies might be blocking access.", variant: "destructive" });
+            toast({ title: "Room not found", description: "Could not load room details. The room may not exist, RLS policies might be blocking access or Realtime replication is not enabled for 'rooms' table on Supabase.", variant: "destructive", duration: 10000 });
             setCurrentRoomId(null); 
             setGamePhase('lobby');
           } else {
@@ -438,10 +439,10 @@ export default function HomePage() {
   if (roomData && playerRole) {
     if (gamePhase === 'result') {
       displayedOpponentMove = opponentActualMove;
+    } else if (gamePhase === 'playing') {
+      // Opponent's move is hidden during 'playing' phase
+      displayedOpponentMove = null; 
     }
-    // In 'playing' phase (and others), opponent's actual move is not shown directly.
-    // It will be null, and MoveDisplay will show a placeholder.
-    // The isLoading prop on opponent's MoveDisplay handles the spinner if their move is still pending in DB.
   }
   
   const yourScore = playerRole && roomData ? (playerRole === 'player1' ? roomData.player1_score : roomData.player2_score) : 0;
@@ -550,7 +551,7 @@ export default function HomePage() {
            </Button>
             {playerRole === 'player1' && roomData && ( 
               <Button 
-                onClick={() => { /* Player 1 might want to re-wait or close */
+                onClick={() => { 
                   supabase.from('rooms').update({ status: 'waitingForOpponent', player2_id: null, player2_move: null, player2_online: false }).eq('id', currentRoomId).then(() => {
                     toast({ title: "Room Open Again", description: "Waiting for a new Player 2."});
                   });
@@ -602,16 +603,20 @@ export default function HomePage() {
   return (
     <div className="flex flex-col items-center min-h-screen bg-background text-foreground p-4 md:p-8">
       <div className="w-full max-w-4xl mx-auto">
-        <header className="flex justify-between items-center mb-6 md:mb-10">
-          <div className="flex items-center space-x-2">
+        <header className="flex items-center mb-6 md:mb-10">
+          <div className="flex-1 flex justify-start">
             <Button onClick={copyRoomId} variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
                 <Copy className="mr-2 h-4 w-4" /> Room: {currentRoomId}
             </Button>
           </div>
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-headline font-bold text-center tracking-tight flex-1">RPS Realtime Duel</h1>
-          <Button onClick={handleLeaveRoom} variant="outline" size="sm" className="text-destructive-foreground bg-destructive hover:bg-destructive/90" disabled={isLoading}>
-            {(isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft')) ? <Loader2 className="animate-spin" /> : <LogOut/>} Leave
-          </Button>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-headline font-bold text-center tracking-tight px-4">
+            RPS Realtime Duel
+          </h1>
+          <div className="flex-1 flex justify-end">
+            <Button onClick={handleLeaveRoom} variant="outline" size="sm" className="text-destructive-foreground bg-destructive hover:bg-destructive/90" disabled={isLoading}>
+              {(isLoading && (gamePhase !== 'lobby' && gamePhase !== 'waitingForOpponent' && gamePhase !== 'opponentLeft')) ? <Loader2 className="animate-spin" /> : <LogOut/>} Leave
+            </Button>
+          </div>
         </header>
       </div>
       
@@ -689,4 +694,3 @@ export default function HomePage() {
     </div>
   );
 }
-
