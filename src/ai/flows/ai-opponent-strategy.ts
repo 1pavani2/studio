@@ -1,13 +1,12 @@
-'use server';
 
+// This file is no longer used as the game is now Player-vs-Player using Firebase.
+// It can be deleted or kept for reference if AI features are added back later.
+// 'use server';
 /**
- * @fileOverview This file defines the AI opponent strategy flow for the Rock Paper Scissors game.
- *
- * - aiOpponentStrategy - A function that determines the AI opponent's move.
- * - AiOpponentStrategyInput - The input type for the aiOpponentStrategy function.
- * - AiOpponentStrategyOutput - The return type for the aiOpponentStrategy function.
+ * @fileOverview This file defined the AI opponent strategy flow for the Rock Paper Scissors game.
+ * IT IS NO LONGER IN USE.
  */
-
+/*
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 
@@ -57,3 +56,4 @@ const aiOpponentStrategyFlow = ai.defineFlow(
     return output!;
   }
 );
+*/
