@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { Move, Result } from '@/lib/gameLogic';
 import { determineWinner } from '@/lib/gameLogic';
 
@@ -56,7 +56,7 @@ interface RoomData {
   player2_online?: boolean;
 }
 
-const generateUserId = () => {
+const generateUserIdClientSide = () => {
   let userId = localStorage.getItem('rpsUserId');
   if (!userId) {
     userId = Math.random().toString(36).substring(2, 15);
@@ -66,17 +66,23 @@ const generateUserId = () => {
 };
 
 export default function HomePage() {
-  const [userId] = useState<string>(generateUserId());
+  const [userId, setUserId] = useState<string | null>(null);
   const [roomIdInput, setRoomIdInput] = useState<string>('');
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
   const [playerRole, setPlayerRole] = useState<PlayerRole>(null);
   
   const [roomData, setRoomData] = useState<RoomData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true); // For initial user ID generation
   const [gamePhase, setGamePhase] = useState<GamePhase>('lobby');
   const [supabaseChannel, setSupabaseChannel] = useState<RealtimeChannel | null>(null);
 
   const { toast } = useToast();
+
+  useEffect(() => {
+    setUserId(generateUserIdClientSide());
+    setInitialLoading(false);
+  }, []);
 
   const resetLocalGameStates = useCallback(() => {
     setPlayerRole(null);
@@ -85,7 +91,7 @@ export default function HomePage() {
 
   // Subscribe to room data with Supabase Realtime
   useEffect(() => {
-    if (!currentRoomId) {
+    if (!currentRoomId || !userId) { // Ensure userId is available
       if (supabaseChannel) {
         supabaseChannel.unsubscribe();
         setSupabaseChannel(null);
@@ -131,7 +137,7 @@ export default function HomePage() {
               }
             }
 
-          } else if (payload.eventType !== 'DELETE') { // If not DELETE and no newRoomData, means room might not exist or filter issue
+          } else if (payload.eventType !== 'DELETE') { 
             toast({ title: "Room not found", description: "The room may have been deleted or the ID is incorrect.", variant: "destructive" });
             setCurrentRoomId(null);
             setRoomData(null);
@@ -142,8 +148,6 @@ export default function HomePage() {
       )
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
-          // console.log('Subscribed to room channel:', currentRoomId);
-          // Fetch initial room data once subscribed
           const { data, error } = await supabase.from('rooms').select('*').eq('id', currentRoomId).single();
           setIsLoading(false);
           if (error || !data) {
@@ -175,8 +179,7 @@ export default function HomePage() {
             // console.log('Unsubscribed from room channel:', currentRoomId);
         });
       }
-      // Mark player as offline on component unmount or room change
-      if (currentRoomId && playerRole) {
+      if (currentRoomId && playerRole && userId) { // Ensure userId exists
         const updatePayload: Partial<RoomData> = {};
         if (playerRole === 'player1') updatePayload.player1_online = false;
         if (playerRole === 'player2') updatePayload.player2_online = false;
@@ -186,9 +189,8 @@ export default function HomePage() {
   }, [currentRoomId, userId, toast]);
 
 
-  // Handle online status (simplified: set on join/create, clear on leave)
   useEffect(() => {
-    if (!currentRoomId || !playerRole || !roomData) return;
+    if (!currentRoomId || !playerRole || !roomData || !userId) return; // Ensure userId exists
     
     const onlineUpdate: Partial<RoomData> = {};
     if (playerRole === 'player1') onlineUpdate.player1_online = true;
@@ -199,10 +201,14 @@ export default function HomePage() {
         if(error) console.error("Error updating online status:", error);
       });
     }
-  }, [currentRoomId, playerRole, roomData?.status]); // Re-assert online status if roomData status changes (e.g., rejoining)
+  }, [currentRoomId, playerRole, roomData?.status, userId]); 
 
 
   const handleCreateRoom = async () => {
+    if (!userId) { // Ensure userId is available
+      toast({ title: "User ID not available", description: "Please wait or refresh the page.", variant: "destructive" });
+      return;
+    }
     setIsLoading(true);
     const newRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
     const initialRoomData: Omit<RoomData, 'id' | 'created_at' | 'last_activity'> & { id: string } = {
@@ -223,7 +229,7 @@ export default function HomePage() {
       if (error) throw error;
       setCurrentRoomId(newRoomId);
       setPlayerRole('player1');
-      setGamePhase('waitingForOpponent'); // Will be confirmed by subscription
+      setGamePhase('waitingForOpponent');
     } catch (error: any) {
       toast({ title: "Failed to create room", description: error.message, variant: "destructive" });
       console.error("Create room error:", error);
@@ -233,6 +239,10 @@ export default function HomePage() {
   };
 
   const handleJoinRoom = async () => {
+    if (!userId) { // Ensure userId is available
+       toast({ title: "User ID not available", description: "Please wait or refresh the page.", variant: "destructive" });
+      return;
+    }
     if (!roomIdInput.trim()) {
       toast({ title: "Invalid Room ID", description: "Please enter a Room ID.", variant: "destructive" });
       return;
@@ -253,10 +263,9 @@ export default function HomePage() {
         return;
       }
 
-      if (roomToJoin.player1_id === userId) { // Already in room as P1
-        setCurrentRoomId(prospectiveRoomId); // Re-join
+      if (roomToJoin.player1_id === userId) { 
+        setCurrentRoomId(prospectiveRoomId); 
         setPlayerRole('player1');
-        // Game phase will be set by subscription
         setIsLoading(false);
         return;
       }
@@ -276,11 +285,9 @@ export default function HomePage() {
             last_activity: new Date().toISOString() 
         })
         .eq('id', prospectiveRoomId)
-        .is('player2_id', null); // Attempt to claim P2 spot atomically
+        .is('player2_id', null); 
 
       if (updateError) {
-        // This could be due to RLS or a concurrent join attempt. A more specific error check might be needed.
-        // For now, assume the spot was taken or another error occurred.
         const { data: refetchedRoom } = await supabase.from('rooms').select('player2_id').eq('id', prospectiveRoomId).single();
         if (refetchedRoom && refetchedRoom.player2_id !== null && refetchedRoom.player2_id !== userId) {
              toast({ title: "Room is full", description: "Another player joined just before you.", variant: "destructive" });
@@ -293,29 +300,24 @@ export default function HomePage() {
       
       setCurrentRoomId(prospectiveRoomId);
       setPlayerRole('player2');
-      // Game phase will be set by subscription reflecting the update
     } catch (error: any) {
       console.error("Join room failed:", error);
       toast({ title: "Failed to join room", description: error.message, variant: "destructive" });
-    } finally {
-      // setIsLoading(false); // isLoading is managed by subscription updates mostly
     }
   };
 
   const handleLeaveRoom = async () => {
-    if (!currentRoomId || !playerRole) return;
+    if (!currentRoomId || !playerRole || !userId) return; // Ensure userId is available
     setIsLoading(true);
 
-    // Unsubscribe first to prevent race conditions with local state updates
     if (supabaseChannel) {
       await supabase.removeChannel(supabaseChannel);
       setSupabaseChannel(null);
     }
     
-    const previousRoomId = currentRoomId; // Store before resetting
+    const previousRoomId = currentRoomId; 
     const previousPlayerRole = playerRole;
 
-    // Reset local state immediately for snappier UI
     setCurrentRoomId(null);
     setPlayerRole(null);
     setRoomData(null);
@@ -328,7 +330,7 @@ export default function HomePage() {
         const { error } = await supabase.from('rooms').delete().eq('id', previousRoomId);
         if (error) throw error;
         toast({ title: "Room Closed", description: "You have left and closed the room."});
-      } else { // Player 2 leaves
+      } else { 
         const { error } = await supabase
           .from('rooms')
           .update({
@@ -345,15 +347,13 @@ export default function HomePage() {
     } catch (error: any) {
       toast({ title: "Error leaving room", description: error.message, variant: "destructive" });
       console.error("Leave room error:", error);
-      // If error, try to re-establish state based on potential DB reality or force lobby
-      // This part is complex; for now, rely on manual re-join or create
     } finally {
       setIsLoading(false);
     }
   };
 
   const handlePlayerSelectMove = async (move: Move) => {
-    if (!currentRoomId || !playerRole || !roomData || roomData.status !== 'playing') return;
+    if (!currentRoomId || !playerRole || !roomData || roomData.status !== 'playing' || !userId) return; // Ensure userId
     
     const playerMoveField = playerRole === 'player1' ? 'player1_move' : 'player2_move';
     if (roomData[playerMoveField] !== null) {
@@ -371,25 +371,19 @@ export default function HomePage() {
         .update(updatePayload)
         .eq('id', currentRoomId);
       if (error) throw error;
-      // UI will update via Supabase realtime subscription
     } catch (error: any) {
       toast({ title: "Failed to make move", description: error.message, variant: "destructive" });
       console.error("Select move error:", error);
-    } finally {
-      // setIsLoading(false); // isLoading reset by subscription usually
-    }
+    } 
   };
 
-  // Effect to determine winner when both players have moved (P1 responsibility)
   useEffect(() => {
-    if (!roomData || !currentRoomId || playerRole !== 'player1' || roomData.status !== 'playing') return;
+    if (!roomData || !currentRoomId || playerRole !== 'player1' || roomData.status !== 'playing' || !userId) return; // Ensure userId
 
     const { player1_move, player2_move, round } = roomData;
 
     if (player1_move && player2_move) {
-      // Ensure this effect only runs once per move set for a round.
-      // The status change to 'result' will prevent re-triggering.
-      setIsLoading(true); // Indicate processing
+      setIsLoading(true); 
       
       const resultP1 = determineWinner(player1_move, player2_move);
       let newP1Score = roomData.player1_score;
@@ -409,21 +403,19 @@ export default function HomePage() {
         .from('rooms')
         .update(updatePayload)
         .eq('id', currentRoomId)
-        .eq('round', round) // Optimistic concurrency for round
+        .eq('round', round) 
         .then(({ error }) => {
-          // setIsLoading(false); // Managed by subscription
           if (error) {
             toast({ title: "Error processing round", description: error.message, variant: "destructive" });
             console.error("Failed to update result:", error);
           }
-          // Successful update will trigger the realtime listener
         });
     }
-  }, [roomData, currentRoomId, playerRole, toast]);
+  }, [roomData, currentRoomId, playerRole, toast, userId]);
 
 
   const handlePlayAgain = async () => {
-    if (!currentRoomId || !roomData || playerRole !== 'player1') { 
+    if (!currentRoomId || !roomData || playerRole !== 'player1' || !userId) {  // Ensure userId
         if(playerRole === 'player2'){
             toast({title: "Waiting for Host", description: "Player 1 (Host) can start the next round."});
         }
@@ -442,12 +434,9 @@ export default function HomePage() {
         })
         .eq('id', currentRoomId);
       if (error) throw error;
-      // UI updates via subscription
     } catch (error: any) {
       toast({ title: "Failed to start new round", description: error.message, variant: "destructive" });
       console.error("Play again error:", error);
-    } finally {
-      // setIsLoading(false); // Managed by subscription
     }
   };
   
@@ -459,7 +448,6 @@ export default function HomePage() {
     }
   };
 
-  // Derived states for UI rendering
   const yourMove = playerRole && roomData ? (playerRole === 'player1' ? roomData.player1_move : roomData.player2_move) : null;
   const opponentMove = playerRole && roomData ? (playerRole === 'player1' ? roomData.player2_move : roomData.player1_move) : null;
   
@@ -484,7 +472,7 @@ export default function HomePage() {
   const selfPlayerName = playerRole === 'player1' ? "Player 1 (You)" : (playerRole === 'player2' ? "Player 2 (You)" : "You");
   const opponentPlayerName = playerRole === 'player1' ? (roomData?.player2_id ? "Player 2" : "Opponent") : "Player 1";
 
-  if (isLoading && !roomData && gamePhase === 'lobby') { // Initial load check
+  if (initialLoading || (isLoading && !roomData && gamePhase === 'lobby' && !currentRoomId)) {
      return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
         <Loader2 className="w-16 h-16 animate-spin text-primary mb-4" />
@@ -525,7 +513,7 @@ export default function HomePage() {
             </div>
           </CardContent>
         </Card>
-         <p className="mt-4 text-xs text-muted-foreground">Your User ID: {userId}</p>
+         {userId && <p className="mt-4 text-xs text-muted-foreground">Your User ID: {userId}</p>}
       </div>
     );
   }
@@ -557,7 +545,6 @@ export default function HomePage() {
         {playerRole === 'player1' && (
             <Button 
                 onClick={() => {
-                    // Transition to waiting for a new opponent
                     if(currentRoomId) {
                         supabase.from('rooms').update({ 
                             player2_id: null, 
@@ -566,7 +553,7 @@ export default function HomePage() {
                             player2_online: false,
                             last_activity: new Date().toISOString()
                         }).eq('id', currentRoomId).then(() => {
-                            setGamePhase('waitingForOpponent'); // Manually set to show UI update
+                            setGamePhase('waitingForOpponent'); 
                         });
                     }
                 }} 
@@ -588,11 +575,11 @@ export default function HomePage() {
       </div>
     );
   }
-  if (!roomData && !currentRoomId && gamePhase !== 'lobby') { // Fallback if something went wrong
-    setGamePhase('lobby'); // Force back to lobby
+  if (!roomData && !currentRoomId && gamePhase !== 'lobby') { 
+    setGamePhase('lobby'); 
     return <p>Error: No room data and not in lobby. Resetting...</p>
   }
-  if (!roomData) return null; // Should not happen if logic above is correct
+  if (!roomData || !userId) return null; 
   
   const showWaitingForOpponentMove = roomData.status === 'playing' && playerRole && 
     (playerRole === 'player1' ? roomData.player1_move && !roomData.player2_move : roomData.player2_move && !roomData.player1_move);
